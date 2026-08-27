@@ -1,0 +1,6 @@
+{
+  "name": "Vagabond Riders",
+  "description": "Official Vagabond Riders Portal with multi-tab browsing, public PDF/Excel downloads, password autofill, and official branding.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="256dp"
+    android:height="256dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+
+    <!-- Outer Orange 3D Rim with Gradient & Depth -->
+    <path
+        android:pathData="M128,12 A116,116 0 1,1 127.9,12"
+        android:strokeWidth="16">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="128"
+                android:startY="0"
+                android:endX="128"
+                android:endY="256"
+                android:type="linear">
+                <item android:color="#FB923C" android:offset="0.0" />
+                <item android:color="#EA580C" android:offset="0.5" />
+                <item android:color="#C2410C" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- White Inner Rim Outline -->
+    <path
+        android:pathData="M128,20 A108,108 0 1,1 127.9,20"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000" />
+
+    <!-- Green Circular Field (Vagabond Riders signature green) -->
+    <path
+        android:pathData="M128,22 A106,106 0 1,1 127.9,22">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="128"
+                android:startY="22"
+                android:endX="128"
+                android:endY="234"
+                android:type="linear">
+                <item android:color="#84CC16" android:offset="0.0" />
+                <item android:color="#65A30D" android:offset="0.7" />
+                <item android:color="#4D7C0F" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Black Mechanical Gear (Behind cruiser motorcycle) -->
+    <path
+        android:fillColor="#111827"
+        android:pathData="M128,52 L136,36 L148,40 L146,56 L158,61 L172,50 L181,58 L174,74 L183,82 L198,77 L203,88 L191,99 L195,110 L212,112 L212,125 L195,127 L191,138 L203,149 L198,160 L183,155 L174,163 L181,179 L172,187 L158,176 L146,181 L148,197 L136,201 L128,185 L120,201 L108,197 L110,181 L98,176 L84,187 L75,179 L82,163 L73,155 L58,160 L53,149 L65,138 L61,127 L44,125 L44,112 L61,110 L65,99 L53,88 L58,77 L73,82 L82,74 L75,58 L84,50 L98,61 L110,56 L108,40 L120,36 Z" />
+
+    <!-- Gear inner cutout -->
+    <path
+        android:pathData="M128,68 A60,60 0 1,1 127.9,68"
+        android:fillColor="#65A30D" />
+
+    <!-- Red Fuel Tank Curves (Left & Right) -->
+    <path
+        android:pathData="M78,112 C78,100 88,94 98,94 L100,138 C86,138 78,128 78,112 Z"
+        android:fillColor="#DC2626"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M178,112 C178,100 168,94 158,94 L156,138 C170,138 178,128 178,112 Z"
+        android:fillColor="#DC2626"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5" />
+
+    <!-- Motorcycle Handlebars and Mirrors -->
+    <!-- Left Mirror -->
+    <path
+        android:pathData="M64,68 A12,7 35 1,1 63.9,68"
+        android:fillColor="#1F2937"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M72,74 L84,88"
+        android:strokeColor="#1F2937"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+
+    <!-- Right Mirror -->
+    <path
+        android:pathData="M192,68 A12,7 -35 1,1 191.9,68"
+        android:fillColor="#1F2937"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M184,74 L172,88"
+        android:strokeColor="#1F2937"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round" />
+
+    <!-- Curved Handlebar Pipe -->
+    <path
+        android:pathData="M72,92 C96,80 128,86 128,86 C128,86 160,80 184,92"
+        android:strokeColor="#1F2937"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Left & Right Amber Indicator Lights -->
+    <path
+        android:pathData="M80,96 A7,7 0 1,1 79.9,96"
+        android:fillColor="#EF4444"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M176,96 A7,7 0 1,1 175.9,96"
+        android:fillColor="#EF4444"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2" />
+
+    <!-- Motorcycle Front Forks (Suspension Tubes) -->
+    <path
+        android:pathData="M108,100 L108,148"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="square" />
+    <path
+        android:pathData="M148,100 L148,148"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="square" />
+
+    <!-- Center Motorcycle Headlight Shell & Reflector -->
+    <!-- Headlight Outer Chrome Rim -->
+    <path
+        android:pathData="M128,112 A22,22 0 1,1 127.9,112"
+        android:fillColor="#111827"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5" />
+    <!-- Headlight Glass Reflector Inner -->
+    <path
+        android:pathData="M128,112 A15,15 0 1,1 127.9,112"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M128,112 A10,10 0 1,1 127.9,112"
+        android:fillColor="#E2E8F0" />
+    <!-- Headlight Bulb and grill lines -->
+    <path
+        android:pathData="M128,102 L128,122 M122,104 L122,120 M134,104 L134,120"
+        android:strokeColor="#0F172A"
+        android:strokeWidth="1.5" />
+    <path
+        android:pathData="M128,112 A4,4 0 1,1 127.9,112"
+        android:fillColor="#0F172A" />
+
+    <!-- Banner Shield Background (Dark with White Outline) -->
+    <path
+        android:pathData="M48,140 L208,140 L208,166 L170,166 L128,196 L86,166 L48,166 Z"
+        android:fillColor="#18181B"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5" />
+
+    <!-- 3 White Stars in Shield Tip -->
+    <!-- Center Star -->
+    <path
+        android:pathData="M128,172 L130,177 L135,177 L131,180 L132.5,185 L128,182 L123.5,185 L125,180 L121,177 L126,177 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Left Star -->
+    <path
+        android:pathData="M110,168 L111.5,172 L115.5,172 L112.5,174.5 L113.5,178.5 L110,176 L106.5,178.5 L107.5,174.5 L104.5,172 L108.5,172 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- Right Star -->
+    <path
+        android:pathData="M146,168 L147.5,172 L151.5,172 L148.5,174.5 L149.5,178.5 L146,176 L142.5,178.5 L143.5,174.5 L140.5,172 L144.5,172 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
