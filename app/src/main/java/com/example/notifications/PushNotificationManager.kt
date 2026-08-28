@@ -17,6 +17,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.navigation.NavigationManager
 import com.example.utils.CustomLogoManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,8 +64,8 @@ object PushNotificationManager {
     const val DEFAULT_PHP_ENDPOINT = "https://app.vagabondriders.com/api/notifications.php"
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
         .build()
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -103,7 +104,7 @@ object PushNotificationManager {
 
         // Start both in-process high-frequency loop and AlarmManager background wake loop
         startPeriodicPushSync(context)
-        PushAlarmReceiver.scheduleNextAlarm(context, 5_000L)
+        PushAlarmReceiver.scheduleNextAlarm(context, 3_000L)
 
         // Preload official logo in background for fast notification rendering
         scope.launch {
@@ -184,16 +185,17 @@ object PushNotificationManager {
                 null
             }
         } catch (e: Exception) {
-            Log.d(TAG, "Failed to download push image: ${e.message}")
+            Log.d(TAG, "Failed to download push image ($imageUrl): ${e.message}")
             null
         }
     }
 
     /**
-     * Shows a local rich native Android push notification with:
+     * Shows a rich native Android push notification with:
      * - Logo on the left (Large Icon loaded from https://app.vagabondriders.com/logo.png)
      * - Title and message text
      * - Optional attached image / banner down below the message (BigPictureStyle)
+     * - Click Action that opens the app and directly navigates to the target_url
      */
     fun displayNotification(
         context: Context,
@@ -203,13 +205,18 @@ object PushNotificationManager {
         imageUrl: String? = null,
         notificationId: Int = (System.currentTimeMillis() % 100000).toInt()
     ) {
+        val resolvedTargetUrl = NavigationManager.resolveTargetUrl(targetUrl)
+        val resolvedImageUrl = NavigationManager.resolveImageUrl(imageUrl)
+
         scope.launch(Dispatchers.IO) {
             try {
                 val intent = Intent(context, MainActivity::class.java).apply {
+                    action = Intent.ACTION_VIEW
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                    if (!targetUrl.isNullOrBlank()) {
-                        putExtra("extra_target_url", targetUrl)
-                        data = Uri.parse(targetUrl)
+                    putExtra("is_from_notification", true)
+                    if (!resolvedTargetUrl.isNullOrBlank()) {
+                        putExtra("extra_target_url", resolvedTargetUrl)
+                        data = Uri.parse(resolvedTargetUrl)
                     }
                 }
 
@@ -229,8 +236,8 @@ object PushNotificationManager {
                 }
 
                 // 2. Download attached content image if present
-                val contentImageBitmap = if (!imageUrl.isNullOrBlank()) {
-                    downloadBitmap(imageUrl)
+                val contentImageBitmap = if (!resolvedImageUrl.isNullOrBlank()) {
+                    downloadBitmap(resolvedImageUrl)
                 } else null
 
                 val notificationBuilder = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -278,10 +285,10 @@ object PushNotificationManager {
                     id = notificationId.toString(),
                     title = title,
                     message = body,
-                    imageUrl = imageUrl,
-                    targetUrl = targetUrl
+                    imageUrl = resolvedImageUrl,
+                    targetUrl = resolvedTargetUrl
                 )
-                _notificationsHistory.value = listOf(newMsg) + _notificationsHistory.value
+                _notificationsHistory.value = listOf(newMsg) + _notificationsHistory.value.filter { it.id != newMsg.id }
             } catch (e: Exception) {
                 Log.e(TAG, "Error rendering rich notification: ${e.message}", e)
             }
@@ -289,7 +296,8 @@ object PushNotificationManager {
     }
 
     /**
-     * Starts continuous periodic polling of the PHP backend to receive new notifications quickly.
+     * Starts continuous periodic polling of the PHP backend to receive new notifications quickly
+     * while the app is active.
      */
     fun startPeriodicPushSync(context: Context) {
         pollingJob?.cancel()
@@ -377,51 +385,98 @@ object PushNotificationManager {
     private fun parseAndShowPushNotifications(context: Context, responseJson: String) {
         if (responseJson.isBlank()) return
         try {
-            val root = JSONObject(responseJson)
+            val trimmed = responseJson.trim()
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-            // Supports single notification or list
-            val notificationsArray: JSONArray? = if (root.has("notifications")) {
-                root.optJSONArray("notifications")
-            } else if (root.has("messages")) {
-                root.optJSONArray("messages")
-            } else if (root.has("title") && (root.has("message") || root.has("body"))) {
-                JSONArray().put(root)
-            } else null
-
-            if (notificationsArray != null) {
-                var maxId = prefs.getString(KEY_LAST_NOTIFICATION_ID, "0") ?: "0"
-
-                for (i in 0 until notificationsArray.length()) {
-                    val item = notificationsArray.optJSONObject(i) ?: continue
-                    val id = item.optString("id", UUID.randomUUID().toString())
-                    val title = item.optString("title", "Vagabond Riders Alert")
-                    val message = item.optString("message", item.optString("body", ""))
-                    val targetUrl = item.optString("target_url", item.optString("url", item.optString("link", "")))
-
-                    // Extract image from any commonly used field name
-                    val imageUrl = item.optString(
-                        "image_url",
-                        item.optString("image", item.optString("banner", item.optString("photo", item.optString("img", item.optString("picture", "")))))
-                    )
-
-                    if (message.isNotBlank()) {
-                        displayNotification(
-                            context = context,
-                            title = title,
-                            body = message,
-                            targetUrl = targetUrl.ifBlank { null },
-                            imageUrl = imageUrl.ifBlank { null },
-                            notificationId = (id.hashCode() and 0x7FFFFFFF)
-                        )
-                        maxId = id
+            val notificationsArray: JSONArray = when {
+                trimmed.startsWith("[") -> {
+                    JSONArray(trimmed)
+                }
+                trimmed.startsWith("{") -> {
+                    val root = JSONObject(trimmed)
+                    when {
+                        root.has("notifications") -> root.optJSONArray("notifications") ?: JSONArray()
+                        root.has("messages") -> root.optJSONArray("messages") ?: JSONArray()
+                        root.has("data") -> root.optJSONArray("data") ?: JSONArray()
+                        root.has("headline") || root.has("title") || root.has("message") || root.has("body") -> {
+                            JSONArray().put(root)
+                        }
+                        else -> JSONArray()
                     }
                 }
-
-                prefs.edit().putString(KEY_LAST_NOTIFICATION_ID, maxId).apply()
+                else -> JSONArray()
             }
-        } catch (_: Exception) {
-            // Non-JSON or standard web page response ignored
+
+            var maxId = prefs.getString(KEY_LAST_NOTIFICATION_ID, "0") ?: "0"
+
+            for (i in 0 until notificationsArray.length()) {
+                val item = notificationsArray.optJSONObject(i) ?: continue
+
+                // 1. ID resolution
+                val rawId = when {
+                    item.has("id") -> item.optString("id")
+                    else -> UUID.randomUUID().toString()
+                }
+
+                // 2. Headline / Title resolution (supporting database column 'headline')
+                val title = when {
+                    item.has("headline") -> item.optString("headline")
+                    item.has("title") -> item.optString("title")
+                    item.has("subject") -> item.optString("subject")
+                    item.has("header") -> item.optString("header")
+                    else -> "Vagabond Riders Alert"
+                }.ifBlank { "Vagabond Riders Alert" }
+
+                // 3. Message / Body resolution (supporting database column 'message')
+                val message = when {
+                    item.has("message") -> item.optString("message")
+                    item.has("body") -> item.optString("body")
+                    item.has("description") -> item.optString("description")
+                    item.has("text") -> item.optString("text")
+                    item.has("content") -> item.optString("content")
+                    else -> ""
+                }
+
+                // 4. Target URL resolution (supporting database column 'target_url')
+                val rawTargetUrl = when {
+                    item.has("target_url") -> item.optString("target_url")
+                    item.has("url") -> item.optString("url")
+                    item.has("link") -> item.optString("link")
+                    item.has("target") -> item.optString("target")
+                    item.has("redirect_url") -> item.optString("redirect_url")
+                    else -> null
+                }
+                val resolvedTargetUrl = NavigationManager.resolveTargetUrl(rawTargetUrl)
+
+                // 5. Image URL resolution (supporting database column 'image_url' e.g. uploads/17...)
+                val rawImageUrl = when {
+                    item.has("image_url") -> item.optString("image_url")
+                    item.has("image") -> item.optString("image")
+                    item.has("banner") -> item.optString("banner")
+                    item.has("photo") -> item.optString("photo")
+                    item.has("img") -> item.optString("img")
+                    item.has("picture") -> item.optString("picture")
+                    item.has("upload") -> item.optString("upload")
+                    else -> null
+                }
+                val resolvedImageUrl = NavigationManager.resolveImageUrl(rawImageUrl)
+
+                if (message.isNotBlank() || title.isNotBlank()) {
+                    displayNotification(
+                        context = context,
+                        title = title,
+                        body = message,
+                        targetUrl = resolvedTargetUrl,
+                        imageUrl = resolvedImageUrl,
+                        notificationId = (rawId.hashCode() and 0x7FFFFFFF)
+                    )
+                    maxId = rawId
+                }
+            }
+
+            prefs.edit().putString(KEY_LAST_NOTIFICATION_ID, maxId).apply()
+        } catch (e: Exception) {
+            Log.d(TAG, "Error parsing push JSON response: ${e.message}")
         }
     }
 }

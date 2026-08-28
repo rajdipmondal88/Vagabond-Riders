@@ -13,8 +13,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.example.auth.GoogleOAuthHelper
+import com.example.navigation.NavigationManager
 import com.example.notifications.PushAlarmReceiver
 import com.example.notifications.PushNotificationManager
+import com.example.notifications.PushNotificationWorker
 import com.example.ui.VRAppScreen
 import com.example.ui.theme.MyApplicationTheme
 
@@ -32,7 +34,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         PushNotificationManager.init(this)
-        handleIntent(intent)
+        handleIntent(intent, isColdStart = true)
 
         setContent {
             MyApplicationTheme {
@@ -49,7 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleIntent(intent)
+        handleIntent(intent, isColdStart = false)
     }
 
     override fun onResume() {
@@ -67,23 +69,49 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Arm alarm for reliable background reception when completely hidden/minimized
+        // Arm alarm and worker for reliable background reception when app is closed or backgrounded
         PushAlarmReceiver.scheduleNextAlarm(this, 10_000L)
+        PushNotificationWorker.triggerExpeditedOneTime(this)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    private fun handleIntent(intent: Intent?, isColdStart: Boolean) {
         if (intent == null) return
 
         val dataUri = intent.data
         val extraTargetUrl = intent.getStringExtra("extra_target_url")
-        val targetUrl = extraTargetUrl ?: dataUri?.toString()
+        val isFromNotification = intent.getBooleanExtra("is_from_notification", false) || !extraTargetUrl.isNullOrBlank()
+        val rawTargetUrl = extraTargetUrl ?: dataUri?.toString()
 
         // 1. Direct cookie extraction and injection across membership and app domains
-        extractAndInjectCookies(intent, dataUri, targetUrl)
+        extractAndInjectCookies(intent, dataUri, rawTargetUrl)
 
-        // 2. Delegate to GoogleOAuthHelper to resolve destination and broadcast to active WebView
-        if (!targetUrl.isNullOrBlank()) {
-            GoogleOAuthHelper.handleIncomingRedirect(targetUrl)
+        if (!rawTargetUrl.isNullOrBlank()) {
+            val resolvedTargetUrl = NavigationManager.resolveTargetUrl(rawTargetUrl)
+
+            if (isFromNotification) {
+                // User tapped push notification -> Direct navigation to specific target_url
+                Log.d(TAG, "Handling notification click destination: $resolvedTargetUrl (coldStart=$isColdStart)")
+                if (isColdStart) {
+                    NavigationManager.setColdStartTargetUrl(resolvedTargetUrl)
+                } else {
+                    NavigationManager.navigateToUrl(resolvedTargetUrl)
+                }
+            } else {
+                // Check if this is an OAuth callback or standard deep link
+                val isAuthUrl = GoogleOAuthHelper.isGoogleOAuthUrl(rawTargetUrl) ||
+                        rawTargetUrl.startsWith("vrportal://", ignoreCase = true) ||
+                        GoogleOAuthHelper.isOAuthInProgress.value
+
+                if (isAuthUrl) {
+                    GoogleOAuthHelper.handleIncomingRedirect(rawTargetUrl)
+                } else {
+                    if (isColdStart) {
+                        NavigationManager.setColdStartTargetUrl(resolvedTargetUrl)
+                    } else {
+                        NavigationManager.navigateToUrl(resolvedTargetUrl)
+                    }
+                }
+            }
         }
     }
 

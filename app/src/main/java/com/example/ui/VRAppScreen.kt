@@ -78,6 +78,7 @@ import com.example.data.DownloadedFile
 import com.example.data.WebTab
 import com.example.location.BackgroundLocationManager
 import com.example.location.LocationData
+import com.example.navigation.NavigationManager
 import com.example.network.NetworkMonitor
 import com.example.notifications.PushNotificationManager
 import com.example.ui.components.BottomTabBar
@@ -212,21 +213,38 @@ fun VRAppScreen(
         }
     }
 
+    val startDestinationUrl = remember { NavigationManager.consumeColdStartTargetUrl() ?: initialUrl }
+
     // Multi-Tab Management State
     val tabs = remember {
         mutableStateListOf(
             WebTab(
                 id = UUID.randomUUID().toString(),
                 title = "Home",
-                url = initialUrl
+                url = startDestinationUrl
             )
         )
     }
     var activeTabId by remember { mutableStateOf(tabs.first().id) }
     val activeTab = tabs.find { it.id == activeTabId } ?: tabs.first()
 
-    // Handle incoming OAuth callback / deep links returned from Google Chrome
+    // Handle incoming Navigation Target URLs (Push Notifications, direct links) & OAuth redirects
     LaunchedEffect(Unit) {
+        // 1. Direct Target URL listener for Push Notifications
+        launch {
+            NavigationManager.targetUrlEvents.collect { targetUrl ->
+                if (targetUrl.isNotBlank()) {
+                    android.webkit.CookieManager.getInstance().flush()
+                    activeTab.webView?.loadUrl(targetUrl)
+                    val idx = tabs.indexOfFirst { it.id == activeTabId }
+                    if (idx != -1) {
+                        tabs[idx] = tabs[idx].copy(url = targetUrl)
+                    }
+                }
+            }
+        }
+
+        // 2. Google OAuth return URL listener
         launch {
             GoogleOAuthHelper.incomingOAuthUrl.collect { returnUrl ->
                 val finalUrl = if (returnUrl.isNotBlank()) returnUrl else "https://membership.vagabondriders.com/profile.php"

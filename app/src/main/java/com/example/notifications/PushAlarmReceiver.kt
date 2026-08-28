@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Background Alarm Receiver that ensures push notifications continue to arrive fast
- * and reliably even when the app is minimized, in background, or in Android Doze mode.
+ * and reliably even when the app is closed, swiped away, minimized, or in Android Doze mode.
  */
 class PushAlarmReceiver : BroadcastReceiver() {
 
@@ -23,7 +23,7 @@ class PushAlarmReceiver : BroadcastReceiver() {
         private const val TAG = "VRPushAlarmReceiver"
         private const val ALARM_REQUEST_CODE = 4040
         const val ACTION_SYNC_PUSH = "com.example.notifications.ACTION_SYNC_PUSH"
-        private const val SYNC_INTERVAL_MS = 15_000L // 15 seconds high-frequency check
+        private const val SYNC_INTERVAL_MS = 25_000L // 25 seconds background polling cadence
 
         @SuppressLint("ScheduleExactAlarm")
         fun scheduleNextAlarm(context: Context, delayMs: Long = SYNC_INTERVAL_MS) {
@@ -86,20 +86,29 @@ class PushAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action
-        if (action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED || action == ACTION_SYNC_PUSH) {
+        val isTargetAction = action == Intent.ACTION_BOOT_COMPLETED ||
+                action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+                action == ACTION_SYNC_PUSH ||
+                action == Intent.ACTION_USER_PRESENT ||
+                action == Intent.ACTION_SCREEN_ON ||
+                action == "android.net.conn.CONNECTIVITY_CHANGE"
+
+        if (isTargetAction) {
+            val pendingResult = goAsync()
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             val wakeLock = powerManager?.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "VagabondRiders:PushSyncWakeLock"
             )?.apply {
-                acquire(10_000L) // Hold wake lock for up to 10 seconds to fetch notifications
+                acquire(15_000L) // Hold wake lock to complete network fetch
             }
 
             CoroutineScope(Dispatchers.IO).launch {
                 try {
+                    PushNotificationManager.init(context)
                     PushNotificationManager.checkPhpBackendForNotifications(context)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Alarm push check failed: ${e.message}")
+                    Log.e(TAG, "Alarm push check error: ${e.message}")
                 } finally {
                     try {
                         if (wakeLock?.isHeld == true) {
@@ -107,8 +116,9 @@ class PushAlarmReceiver : BroadcastReceiver() {
                         }
                     } catch (_: Exception) {}
 
-                    // Schedule next check
+                    // Schedule next alarm check to keep background polling alive
                     scheduleNextAlarm(context)
+                    pendingResult.finish()
                 }
             }
         }
