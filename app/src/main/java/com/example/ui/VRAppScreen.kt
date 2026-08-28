@@ -33,14 +33,19 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -81,6 +86,7 @@ import com.example.location.LocationData
 import com.example.navigation.NavigationManager
 import com.example.network.NetworkMonitor
 import com.example.notifications.PushNotificationManager
+import com.example.ui.components.AppUpdateBottomSheet
 import com.example.ui.components.BottomTabBar
 import com.example.ui.components.DownloadNotificationBanner
 import com.example.ui.components.DownloadsBottomSheet
@@ -97,6 +103,8 @@ import com.example.ui.theme.GeoOnBackground
 import com.example.ui.theme.GeoOnSurfaceVariant
 import com.example.ui.theme.GeoSurface
 import com.example.ui.viewmodel.PasswordManagerViewModel
+import com.example.updater.AppUpdateManager
+import com.example.updater.UpdateState
 import com.example.utils.CustomLogoManager
 import com.example.utils.FileDownloadHelper
 import kotlinx.coroutines.delay
@@ -312,10 +320,17 @@ fun VRAppScreen(
     var showDownloadsSheet by remember { mutableStateOf(false) }
     val downloadsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    // Splash duration timer
+    var showUpdateSheet by remember { mutableStateOf(false) }
+    val updateSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val updateState by AppUpdateManager.updateState.collectAsState()
+
+    var showTopOverflowMenu by remember { mutableStateOf(false) }
+
+    // Splash duration timer & background update check
     LaunchedEffect(Unit) {
         delay(2000)
         showSplash = false
+        AppUpdateManager.checkForUpdates(context)
     }
 
     // Auto-fill on login page
@@ -454,64 +469,6 @@ fun VRAppScreen(
                         }
                     }
 
-                    // Password Manager Quick Button
-                    IconButton(
-                        onClick = { showPasswordSheet = true },
-                        modifier = Modifier.testTag("btn_passwords")
-                    ) {
-                        BadgedBox(
-                            badge = {
-                                if (savedCredentials.isNotEmpty()) {
-                                    Badge(
-                                        containerColor = Color(0xFFEA580C),
-                                        contentColor = Color.White
-                                    ) {
-                                        Text(
-                                            text = savedCredentials.size.toString(),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = "Saved Passwords",
-                                tint = Color(0xFFEA580C)
-                            )
-                        }
-                    }
-
-                    // Downloads Folder Button
-                    IconButton(
-                        onClick = { showDownloadsSheet = true },
-                        modifier = Modifier.testTag("btn_downloads_top")
-                    ) {
-                        BadgedBox(
-                            badge = {
-                                if (downloadHistory.isNotEmpty()) {
-                                    Badge(
-                                        containerColor = Color(0xFF0284C7),
-                                        contentColor = Color.White
-                                    ) {
-                                        Text(
-                                            text = downloadHistory.size.toString(),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.FolderOpen,
-                                contentDescription = "Downloads & Reports",
-                                tint = Color(0xFF0284C7)
-                            )
-                        }
-                    }
-
                     // Push Notifications Button
                     IconButton(
                         onClick = { showPushSheet = true },
@@ -541,16 +498,211 @@ fun VRAppScreen(
                         }
                     }
 
-                    // Share Link Button
-                    IconButton(
-                        onClick = shareCurrentUrl,
-                        modifier = Modifier.testTag("btn_share_top")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "Share",
-                            tint = Color(0xFF16A34A)
-                        )
+                    // Three-dot Overflow Menu (Share, Downloads Folder, App Updates, Saved Passwords)
+                    Box {
+                        val isUpdateAvailable = updateState is UpdateState.Available ||
+                                updateState is UpdateState.Downloaded ||
+                                updateState is UpdateState.Downloading
+                        val hasPendingBadges = isUpdateAvailable || downloadHistory.isNotEmpty()
+
+                        IconButton(
+                            onClick = { showTopOverflowMenu = true },
+                            modifier = Modifier.testTag("btn_top_overflow_menu")
+                        ) {
+                            BadgedBox(
+                                badge = {
+                                    if (hasPendingBadges) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isUpdateAvailable) Color(0xFFEA580C) else Color(0xFF0284C7))
+                                        )
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "More Options",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showTopOverflowMenu,
+                            onDismissRequest = { showTopOverflowMenu = false },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.width(230.dp)
+                        ) {
+                            // 1. Share Current Link
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            text = "Share Page",
+                                            fontWeight = FontWeight.SemiBold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = "Share portal link",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Share,
+                                        contentDescription = null,
+                                        tint = Color(0xFF16A34A),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    shareCurrentUrl()
+                                },
+                                modifier = Modifier.testTag("menu_item_share")
+                            )
+
+                            // 2. Downloads & Reports Folder
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Downloads Folder",
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = if (downloadHistory.isNotEmpty()) "${downloadHistory.size} saved file(s)" else "Reports & PDFs",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (downloadHistory.isNotEmpty()) {
+                                            Badge(
+                                                containerColor = Color(0xFF0284C7),
+                                                contentColor = Color.White
+                                            ) {
+                                                Text(
+                                                    text = downloadHistory.size.toString(),
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.FolderOpen,
+                                        contentDescription = null,
+                                        tint = Color(0xFF0284C7),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    showDownloadsSheet = true
+                                },
+                                modifier = Modifier.testTag("menu_item_downloads")
+                            )
+
+                            // 3. In-App Direct Updates
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "App Update",
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = if (isUpdateAvailable) "Update ready" else "Direct APK installer",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (isUpdateAvailable) Color(0xFFEA580C) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (isUpdateAvailable) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFFEA580C))
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.SystemUpdate,
+                                        contentDescription = null,
+                                        tint = Color(0xFFEA580C),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    showUpdateSheet = true
+                                },
+                                modifier = Modifier.testTag("menu_item_updates")
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                            )
+
+                            // 4. Saved Passwords Manager
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Saved Passwords",
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = "${savedCredentials.size} saved login(s)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = null,
+                                        tint = Color(0xFFEA580C),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    showPasswordSheet = true
+                                },
+                                modifier = Modifier.testTag("menu_item_passwords")
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -721,6 +873,9 @@ fun VRAppScreen(
                             onNewTabRequested = { newTabUrl ->
                                 addNewTab(newTabUrl ?: VR_PORTAL_URL, "New Tab")
                             },
+                            onAppUpdateRequested = {
+                                showUpdateSheet = true
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -880,6 +1035,14 @@ fun VRAppScreen(
                     }
                 }
             }
+        )
+    }
+
+    // In-App App Updater Bottom Sheet
+    if (showUpdateSheet) {
+        AppUpdateBottomSheet(
+            sheetState = updateSheetState,
+            onDismiss = { showUpdateSheet = false }
         )
     }
 }

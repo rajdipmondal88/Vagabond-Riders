@@ -42,6 +42,8 @@ import com.example.auth.VRAuthJavascriptBridge
 import com.example.data.DownloadedFile
 import com.example.location.BackgroundLocationManager
 import com.example.notifications.VRPushJavascriptBridge
+import com.example.updater.AppUpdateManager
+import com.example.updater.VRUpdateJavascriptBridge
 import com.example.utils.FileDownloadHelper
 
 class VRDownloadBridge(
@@ -103,7 +105,8 @@ fun VRWebView(
     onWebViewCreated: (WebView) -> Unit = {},
     onDownloadStarted: (String) -> Unit = {},
     onDownloadFinished: (DownloadedFile) -> Unit = {},
-    onNewTabRequested: (String) -> Unit = {}
+    onNewTabRequested: (String) -> Unit = {},
+    onAppUpdateRequested: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var currentWebView by remember { mutableStateOf<WebView?>(null) }
@@ -147,6 +150,10 @@ fun VRWebView(
 
     val authBridge = remember {
         VRAuthJavascriptBridge(context)
+    }
+
+    val updateBridge = remember {
+        VRUpdateJavascriptBridge(context)
     }
 
     AndroidView(
@@ -196,18 +203,25 @@ fun VRWebView(
                 addJavascriptInterface(pushBridge, "VagabondPush")
                 addJavascriptInterface(authBridge, "AndroidAuth")
                 addJavascriptInterface(authBridge, "VRAuth")
+                addJavascriptInterface(updateBridge, "VRAppUpdate")
+                addJavascriptInterface(updateBridge, "AndroidUpdater")
 
                 // Download Listener: Intercepts PDF, Excel, and file downloads directly
                 setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, contentLength ->
-                    FileDownloadHelper.startDownload(
-                        context = ctx,
-                        url = downloadUrl,
-                        userAgent = userAgent,
-                        contentDisposition = contentDisposition,
-                        mimetype = mimetype,
-                        onDownloadStarted = onDownloadStarted,
-                        onDownloadFinished = onDownloadFinished
-                    )
+                    if (downloadUrl.endsWith(".apk", ignoreCase = true) || mimetype.equals("application/vnd.android.package-archive", ignoreCase = true) || downloadUrl.contains("Vagabond-Riders.apk", ignoreCase = true)) {
+                        AppUpdateManager.startDownload(ctx)
+                        onAppUpdateRequested()
+                    } else {
+                        FileDownloadHelper.startDownload(
+                            context = ctx,
+                            url = downloadUrl,
+                            userAgent = userAgent,
+                            contentDisposition = contentDisposition,
+                            mimetype = mimetype,
+                            onDownloadStarted = onDownloadStarted,
+                            onDownloadFinished = onDownloadFinished
+                        )
+                    }
                 }
 
                 webChromeClient = object : WebChromeClient() {
@@ -598,8 +612,16 @@ fun VRWebView(
                             }
                         }
 
-                        // Direct file download URL extensions or export query parameters
+                        // Direct APK update installer interception
                         val lowerUrl = urlString.lowercase()
+                        val isApkUpdateFile = lowerUrl.endsWith(".apk") || lowerUrl.contains("vagabond-riders.apk")
+                        if (isApkUpdateFile) {
+                            AppUpdateManager.startDownload(context)
+                            onAppUpdateRequested()
+                            return true
+                        }
+
+                        // Direct file download URL extensions or export query parameters
                         val isDirectDownloadFile = lowerUrl.endsWith(".pdf") ||
                                 lowerUrl.endsWith(".xlsx") ||
                                 lowerUrl.endsWith(".xls") ||
