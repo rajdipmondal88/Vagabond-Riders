@@ -80,7 +80,12 @@ class MainActivity : ComponentActivity() {
         val dataUri = intent.data
         val extraTargetUrl = intent.getStringExtra("extra_target_url")
         val isFromNotification = intent.getBooleanExtra("is_from_notification", false) || !extraTargetUrl.isNullOrBlank()
+        val isOpenMusicPlayer = intent.getBooleanExtra("OPEN_MUSIC_PLAYER", false)
         val rawTargetUrl = extraTargetUrl ?: dataUri?.toString()
+
+        if (isOpenMusicPlayer) {
+            com.example.media.VRMusicManager.openPlayerSheetRequested.value = true
+        }
 
         // 1. Direct cookie extraction and injection across membership and app domains
         extractAndInjectCookies(intent, dataUri, rawTargetUrl)

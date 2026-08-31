@@ -86,6 +86,9 @@ import com.example.location.LocationData
 import com.example.navigation.NavigationManager
 import com.example.network.NetworkMonitor
 import com.example.notifications.PushNotificationManager
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.MusicNote
+import com.example.media.VRMusicManager
 import com.example.ui.components.AppUpdateBottomSheet
 import com.example.ui.components.BottomTabBar
 import com.example.ui.components.DownloadNotificationBanner
@@ -96,6 +99,8 @@ import com.example.ui.components.PasswordManagerBottomSheet
 import com.example.ui.components.PushNotificationBottomSheet
 import com.example.ui.components.QuickLoginChipBar
 import com.example.ui.components.SplashScreen
+import com.example.ui.components.VRMiniMusicPlayer
+import com.example.ui.components.VRMusicPlayerBottomSheet
 import com.example.ui.components.VRWebView
 import com.example.ui.components.VagabondLogoBadge
 import com.example.ui.theme.GeoBackground
@@ -323,6 +328,19 @@ fun VRAppScreen(
     var showUpdateSheet by remember { mutableStateOf(false) }
     val updateSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val updateState by AppUpdateManager.updateState.collectAsState()
+
+    // Music Player State & Remote open triggers
+    var showMusicPlayerSheet by remember { mutableStateOf(false) }
+    val musicPlayerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val musicPlaybackState by VRMusicManager.playbackState.collectAsStateWithLifecycle()
+    val openMusicPlayerRequested by VRMusicManager.openPlayerSheetRequested.collectAsStateWithLifecycle()
+
+    LaunchedEffect(openMusicPlayerRequested) {
+        if (openMusicPlayerRequested) {
+            showMusicPlayerSheet = true
+            VRMusicManager.openPlayerSheetRequested.value = false
+        }
+    }
 
     var showTopOverflowMenu by remember { mutableStateOf(false) }
 
@@ -661,12 +679,59 @@ fun VRAppScreen(
                                 modifier = Modifier.testTag("menu_item_updates")
                             )
 
+                            // 4. Vagabond Music Player
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Music Player",
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            Text(
+                                                text = if (musicPlaybackState.currentTrack != null) musicPlaybackState.currentTrack!!.title else "Lock screen & offline audio",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = if (musicPlaybackState.isPlaying) Color(0xFFEA580C) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (musicPlaybackState.isPlaying) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFFEA580C))
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Headphones,
+                                        contentDescription = null,
+                                        tint = if (musicPlaybackState.isPlaying) Color(0xFFEA580C) else Color(0xFF8B5CF6),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                onClick = {
+                                    showTopOverflowMenu = false
+                                    showMusicPlayerSheet = true
+                                },
+                                modifier = Modifier.testTag("menu_item_music_player")
+                            )
+
                             HorizontalDivider(
                                 modifier = Modifier.padding(vertical = 4.dp),
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                             )
 
-                            // 4. Saved Passwords Manager
+                            // 5. Saved Passwords Manager
                             DropdownMenuItem(
                                 text = {
                                     Row(
@@ -944,6 +1009,14 @@ fun VRAppScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
+                // Floating Mini Music Player (appears above bottom bar when audio is playing)
+                VRMiniMusicPlayer(
+                    onExpandPlayer = { showMusicPlayerSheet = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = if (isLoginPage && savedCredentials.isNotEmpty()) 56.dp else 8.dp)
+                )
                 }
             }
 
@@ -1043,6 +1116,14 @@ fun VRAppScreen(
         AppUpdateBottomSheet(
             sheetState = updateSheetState,
             onDismiss = { showUpdateSheet = false }
+        )
+    }
+
+    // Vagabond Music Player & Offline Road Trips Bottom Sheet
+    if (showMusicPlayerSheet) {
+        VRMusicPlayerBottomSheet(
+            sheetState = musicPlayerSheetState,
+            onDismissRequest = { showMusicPlayerSheet = false }
         )
     }
 }

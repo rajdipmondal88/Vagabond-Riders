@@ -41,6 +41,9 @@ import com.example.auth.GoogleOAuthHelper
 import com.example.auth.VRAuthJavascriptBridge
 import com.example.data.DownloadedFile
 import com.example.location.BackgroundLocationManager
+import com.example.media.VRMusicJavascriptBridge
+import com.example.media.VRMusicManager
+import com.example.media.VRTrack
 import com.example.notifications.VRPushJavascriptBridge
 import com.example.updater.AppUpdateManager
 import com.example.updater.VRUpdateJavascriptBridge
@@ -156,6 +159,24 @@ fun VRWebView(
         VRUpdateJavascriptBridge(context)
     }
 
+    val musicBridge = remember {
+        VRMusicJavascriptBridge(context)
+    }
+
+    DisposableEffect(Unit) {
+        VRMusicManager.onWebMediaActionListener = { action, _ ->
+            currentWebView?.post {
+                currentWebView?.evaluateJavascript(
+                    "if (window.onVRMusicAction) window.onVRMusicAction('$action');",
+                    null
+                )
+            }
+        }
+        onDispose {
+            VRMusicManager.onWebMediaActionListener = null
+        }
+    }
+
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -205,6 +226,9 @@ fun VRWebView(
                 addJavascriptInterface(authBridge, "VRAuth")
                 addJavascriptInterface(updateBridge, "VRAppUpdate")
                 addJavascriptInterface(updateBridge, "AndroidUpdater")
+                addJavascriptInterface(musicBridge, "VRMusicPlayer")
+                addJavascriptInterface(musicBridge, "AndroidMusic")
+                addJavascriptInterface(musicBridge, "VagabondMusic")
 
                 // Download Listener: Intercepts PDF, Excel, and file downloads directly
                 setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, contentLength ->
@@ -581,6 +605,122 @@ fun VRWebView(
                         """.trimIndent()
                         evaluateJavascript(jsGoogleOAuthHook, null)
 
+                        // Vagabond Riders Music & Lock-Screen MediaSession Bridge:
+                        val jsMusicLockScreenHook = """
+                            (function() {
+                                if (window._vrMusicHookInjected) return;
+                                window._vrMusicHookInjected = true;
+
+                                // Hook navigator.mediaSession metadata & state
+                                if (window.navigator && window.navigator.mediaSession) {
+                                    var origMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata')?.set;
+                                    var currentMetadata = null;
+
+                                    try {
+                                        Object.defineProperty(window.navigator.mediaSession, 'metadata', {
+                                            get: function() { return currentMetadata; },
+                                            set: function(meta) {
+                                                currentMetadata = meta;
+                                                if (meta && window.VRMusicPlayer) {
+                                                    var artworkUrl = '';
+                                                    if (meta.artwork && meta.artwork.length > 0) {
+                                                        artworkUrl = meta.artwork[0].src || '';
+                                                    }
+                                                    window.VRMusicPlayer.syncMediaMetadata(
+                                                        meta.title || '',
+                                                        meta.artist || '',
+                                                        meta.album || '',
+                                                        artworkUrl,
+                                                        0
+                                                    );
+                                                }
+                                                if (origMetadataSetter) origMetadataSetter.call(window.navigator.mediaSession, meta);
+                                            }
+                                        });
+                                    } catch(e) {}
+
+                                    var origSetActionHandler = window.navigator.mediaSession.setActionHandler;
+                                    window._vrWebMediaHandlers = {};
+                                    window.navigator.mediaSession.setActionHandler = function(action, handler) {
+                                        window._vrWebMediaHandlers[action] = handler;
+                                        return origSetActionHandler ? origSetActionHandler.apply(this, arguments) : null;
+                                    };
+                                }
+
+                                // Native lock-screen action callback handler
+                                window.onVRMusicAction = function(action) {
+                                    if (window._vrWebMediaHandlers && window._vrWebMediaHandlers[action]) {
+                                        try { window._vrWebMediaHandlers[action]({ action: action }); } catch(e) {}
+                                    }
+                                    var audios = document.querySelectorAll('audio, video');
+                                    if (audios.length > 0) {
+                                        var audio = audios[0];
+                                        if (action === 'play') audio.play();
+                                        else if (action === 'pause') audio.pause();
+                                        else if (action === 'toggle') { if (audio.paused) audio.play(); else audio.pause(); }
+                                        else if (action === 'seekBackward') audio.currentTime = Math.max(0, audio.currentTime - 10);
+                                        else if (action === 'seekForward') audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10);
+                                    }
+                                };
+
+                                // Auto-detect HTML5 <audio> playback & sync with lock-screen notification
+                                document.addEventListener('play', function(e) {
+                                    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'VIDEO')) {
+                                        var el = e.target;
+                                        var title = el.getAttribute('data-title') || el.getAttribute('title') || document.title || 'Vagabond Music';
+                                        var artist = el.getAttribute('data-artist') || 'Vagabond Riders';
+                                        var album = el.getAttribute('data-album') || 'VR Road Trips';
+                                        var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
+
+                                        if (window.VRMusicPlayer) {
+                                            window.VRMusicPlayer.syncMediaMetadata(title, artist, album, '', duration);
+                                            window.VRMusicPlayer.syncPlaybackState(true, Math.round(el.currentTime * 1000), duration);
+                                        }
+                                    }
+                                }, true);
+
+                                document.addEventListener('pause', function(e) {
+                                    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'VIDEO')) {
+                                        var el = e.target;
+                                        if (window.VRMusicPlayer) {
+                                            var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
+                                            window.VRMusicPlayer.syncPlaybackState(false, Math.round(el.currentTime * 1000), duration);
+                                        }
+                                    }
+                                }, true);
+
+                                document.addEventListener('timeupdate', function(e) {
+                                    if (e.target && e.target.tagName === 'AUDIO' && !e.target.paused) {
+                                        var el = e.target;
+                                        if (window.VRMusicPlayer) {
+                                            var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
+                                            window.VRMusicPlayer.syncPlaybackState(true, Math.round(el.currentTime * 1000), duration);
+                                        }
+                                    }
+                                }, true);
+
+                                // Intercept clicks on direct audio track links (.mp3, .m4a, .wav, .aac, .ogg)
+                                document.addEventListener('click', function(e) {
+                                    var a = e.target.closest('a');
+                                    if (!a) return;
+                                    var href = a.getAttribute('href') || '';
+                                    if (!href) return;
+                                    var lower = href.toLowerCase();
+                                    if (lower.endsWith('.mp3') || lower.endsWith('.m4a') || lower.endsWith('.wav') || lower.endsWith('.aac') || lower.endsWith('.ogg') || lower.endsWith('.flac')) {
+                                        if (window.VRMusicPlayer) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            var text = (a.innerText || a.textContent || '').trim();
+                                            var title = text.length > 0 ? text : href.substring(href.lastIndexOf('/') + 1);
+                                            var fullUrl = href.startsWith('http') ? href : (window.location.origin + (href.startsWith('/') ? '' : '/') + href);
+                                            window.VRMusicPlayer.playTrack(fullUrl, title, 'Vagabond Riders', '', 0);
+                                        }
+                                    }
+                                }, true);
+                            })();
+                        """.trimIndent()
+                        evaluateJavascript(jsMusicLockScreenHook, null)
+
                         // Immediately inject last known location if available
                         BackgroundLocationManager.currentLocation.value?.let { loc ->
                             BackgroundLocationManager.injectLocationIntoWebView(view, loc)
@@ -618,6 +758,25 @@ fun VRWebView(
                         if (isApkUpdateFile) {
                             AppUpdateManager.startDownload(context)
                             onAppUpdateRequested()
+                            return true
+                        }
+
+                        // Direct Audio file link interception -> plays in background player with lock-screen controls
+                        val isAudioStreamFile = lowerUrl.endsWith(".mp3") ||
+                                lowerUrl.endsWith(".m4a") ||
+                                lowerUrl.endsWith(".wav") ||
+                                lowerUrl.endsWith(".aac") ||
+                                lowerUrl.endsWith(".ogg") ||
+                                lowerUrl.endsWith(".flac")
+
+                        if (isAudioStreamFile) {
+                            val trackTitle = targetUri.lastPathSegment?.substringBeforeLast(".") ?: "Vagabond Music"
+                            val track = VRTrack(
+                                title = trackTitle.replace("_", " ").replace("-", " "),
+                                artist = "Vagabond Riders",
+                                streamUrl = urlString
+                            )
+                            VRMusicManager.playTrack(context, track)
                             return true
                         }
 

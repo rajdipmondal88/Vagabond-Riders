@@ -19,6 +19,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -95,6 +96,34 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Foreground Service for Background Music Playback & Lock Screen Media Controls -->
+        <service
+            android:name=".media.VRMediaPlaybackService"
+            android:enabled="true"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+                <action android:name="com.example.media.ACTION_PLAY" />
+                <action android:name="com.example.media.ACTION_PAUSE" />
+                <action android:name="com.example.media.ACTION_TOGGLE" />
+                <action android:name="com.example.media.ACTION_NEXT" />
+                <action android:name="com.example.media.ACTION_PREVIOUS" />
+                <action android:name="com.example.media.ACTION_STOP" />
+                <action android:name="com.example.media.ACTION_SEEK_FORWARD" />
+                <action android:name="com.example.media.ACTION_SEEK_BACKWARD" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <!-- Background Push Notification Poller & Alarm Receiver (Runs 24/7 even when closed) -->
         <receiver

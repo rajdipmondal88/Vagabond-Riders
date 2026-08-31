@@ -6,12 +6,13 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [SavedCredential::class],
-    version = 1,
+    entities = [SavedCredential::class, OfflineTrack::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun credentialDao(): CredentialDao
+    abstract fun offlineTrackDao(): OfflineTrackDao
 
     companion object {
         @Volatile
