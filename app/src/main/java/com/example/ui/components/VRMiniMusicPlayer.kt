@@ -63,12 +63,16 @@ import com.example.media.VRMusicManager
 @Composable
 fun VRMiniMusicPlayer(
     onExpandPlayer: () -> Unit,
+    isMusicPage: Boolean = false,
+    isDismissed: Boolean = false,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state by VRMusicManager.playbackState.collectAsState()
     val currentTrack = state.currentTrack
 
-    val isVisible = currentTrack != null
+    // The mini music player should only appear under the music page and when not dismissed by user
+    val isVisible = isMusicPage && !isDismissed
 
     AnimatedVisibility(
         visible = isVisible,
@@ -76,7 +80,124 @@ fun VRMiniMusicPlayer(
         exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
         modifier = modifier
     ) {
-        if (currentTrack == null) return@AnimatedVisibility
+        if (currentTrack == null) {
+            // Docked Music Bar when on https://app.vagabondriders.com/music/index.php
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF0F172A),
+                tonalElevation = 8.dp,
+                shadowElevation = 12.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                Color(0xFFEA580C).copy(alpha = 0.8f),
+                                Color(0xFF38BDF8).copy(alpha = 0.6f)
+                            )
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onExpandPlayer() }
+                    .testTag("vr_mini_music_bar_docked")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFEA580C))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Column {
+                            Text(
+                                text = "Vagabond Music Player",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Tap to open player & offline ride tracks",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Open / Expand Action Pill
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = Color(0xFF1E293B),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEA580C).copy(alpha = 0.6f)),
+                            modifier = Modifier.clickable { onExpandPlayer() }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Open Player",
+                                    tint = Color(0xFFEA580C),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Open",
+                                    color = Color(0xFFEA580C),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Cross / Close button for docked bar
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("btn_docked_close")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Bar",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            return@AnimatedVisibility
+        }
 
         // Rotating disc animation when playing
         val infiniteTransition = rememberInfiniteTransition(label = "disc_spin")
@@ -168,15 +289,32 @@ fun VRMiniMusicPlayer(
                             if (currentTrack.isOfflineAvailable) {
                                 Box(
                                     modifier = Modifier
-                                        .padding(end = 4.dp)
+                                        .padding(end = 6.dp)
                                         .clip(RoundedCornerShape(4.dp))
-                                        .background(Color(0xFF16A34A).copy(alpha = 0.2f))
-                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        .background(Color(0xFF16A34A).copy(alpha = 0.25f))
+                                        .border(0.5.dp, Color(0xFF16A34A).copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
                                 ) {
                                     Text(
                                         text = "OFFLINE",
                                         color = Color(0xFF4ADE80),
-                                        fontSize = 8.sp,
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(end = 6.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Color(0xFF0284C7).copy(alpha = 0.25f))
+                                        .border(0.5.dp, Color(0xFF38BDF8).copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = "ONLINE",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 8.5.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -239,7 +377,10 @@ fun VRMiniMusicPlayer(
 
                         // Dismiss/Stop Button
                         IconButton(
-                            onClick = { VRMusicManager.stop() },
+                            onClick = {
+                                VRMusicManager.stop()
+                                onDismiss()
+                            },
                             modifier = Modifier
                                 .size(30.dp)
                                 .testTag("btn_mini_close")
@@ -247,7 +388,7 @@ fun VRMiniMusicPlayer(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close Player",
-                                tint = Color(0xFF64748B),
+                                tint = Color(0xFF94A3B8),
                                 modifier = Modifier.size(16.dp)
                             )
                         }

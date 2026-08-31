@@ -23,15 +23,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Login
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.TwoWheeler
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -40,19 +40,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -74,15 +70,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.SavedCredential
-import com.example.ui.theme.GeoBackground
 import com.example.ui.theme.GeoError
 import com.example.ui.theme.GeoOnBackground
 import com.example.ui.theme.GeoOnSurfaceVariant
 import com.example.ui.theme.GeoOutlineVariant
-import com.example.ui.theme.GeoPrimary
-import com.example.ui.theme.GeoPrimaryContainer
 import com.example.ui.theme.GeoSurface
-import com.example.ui.theme.GeoSurfaceVariant
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +92,12 @@ fun PasswordManagerBottomSheet(
     var showAddEditDialog by remember { mutableStateOf(false) }
     var editingCredential by remember { mutableStateOf<SavedCredential?>(null) }
     var credentialToDelete by remember { mutableStateOf<SavedCredential?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredCredentials = credentials.filter {
+        it.accountLabel.contains(searchQuery, ignoreCase = true) ||
+        it.username.contains(searchQuery, ignoreCase = true)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -114,30 +112,45 @@ fun PasswordManagerBottomSheet(
                 .padding(bottom = 32.dp)
                 .testTag("password_manager_sheet")
         ) {
-            // Header with Vagabond Logo
+            // Header with KeePass / Password Vault identity
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    VagabondLogoBadge(
-                        size = 44.dp,
-                        showRegistrationText = false
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(Color(0xFFEA580C), Color(0xFFC2410C))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
 
                     Spacer(modifier = Modifier.width(12.dp))
 
                     Column {
                         Text(
-                            text = "Saved Passwords & Logins",
+                            text = "Password Safe Vault",
                             style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
                             ),
                             color = GeoOnBackground
                         )
                         Text(
-                            text = "${credentials.size} account(s) saved for auto-login",
+                            text = "${credentials.size} account(s) saved",
                             style = MaterialTheme.typography.bodySmall,
                             color = GeoOnSurfaceVariant
                         )
@@ -161,151 +174,136 @@ fun PasswordManagerBottomSheet(
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Add",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        )
+                        text = "Add Password",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Auto-Fill on Logout / Login Banner
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (autoFillOnLogout) Color(0xFFFFF7ED) else Color(0xFFF1F5F9)
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    if (autoFillOnLogout) Color(0xFFFED7AA) else Color(0xFFE2E8F0)
-                )
-            ) {
-                Row(
+            // Search Bar
+            if (credentials.isNotEmpty()) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Auto-Fill on Logout & Login",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = GeoOnBackground
+                        .testTag("vault_search_input"),
+                    placeholder = { Text("Search saved accounts by label or username...") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = null,
+                            tint = GeoOnSurfaceVariant
                         )
-                        Text(
-                            text = "Keep last username & password filled in the boxes ready for 1-tap Login",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = GeoOnSurfaceVariant,
-                            fontSize = 11.5.sp
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(
-                        checked = autoFillOnLogout,
-                        onCheckedChange = { onToggleAutoFillOnLogout(it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFFEA580C)
-                        )
-                    )
-                }
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear",
+                                    tint = GeoOnSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
+                )
+                Spacer(modifier = Modifier.height(14.dp))
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
-            HorizontalDivider(color = GeoOutlineVariant)
-            Spacer(modifier = Modifier.height(12.dp))
-
+            // List of Accounts
             if (credentials.isEmpty()) {
-                // Empty state with quick sample presets
-                Column(
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF7ED)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFED7AA))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = Color(0xFFEA580C).copy(alpha = 0.6f),
-                        modifier = Modifier.size(54.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "No saved passwords yet",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = GeoOnBackground
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Save Admin, Rider, or Staff credentials once and never enter them again!",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = GeoOnSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(20.dp))
-
-                    Button(
-                        onClick = {
-                            editingCredential = null
-                            showAddEditDialog = true
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFEA580C)
-                        ),
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier.testTag("empty_state_add_account_btn")
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFFEDD5)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = Color(0xFFEA580C),
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No Passwords Saved Yet",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = GeoOnBackground
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Save First Account")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Create an account entry by providing the Account Label, Username, and Password.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = GeoOnSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                editingCredential = null
+                                showAddEditDialog = true
+                            },
+                            shape = RoundedCornerShape(50),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                        ) {
+                            Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Create Saved Account")
+                        }
                     }
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(380.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(credentials, key = { it.id }) { credential ->
-                        CredentialItemCard(
-                            credential = credential,
+                    items(filteredCredentials, key = { it.id }) { cred ->
+                        KeePassAccountCard(
+                            credential = cred,
                             onAutofill = {
-                                onAutofillAccount(credential)
+                                onAutofillAccount(cred)
                                 onDismiss()
                             },
                             onEdit = {
-                                editingCredential = credential
+                                editingCredential = cred
                                 showAddEditDialog = true
                             },
                             onDelete = {
-                                credentialToDelete = credential
+                                credentialToDelete = cred
                             },
                             onCopyUsername = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("Username", credential.username)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, "Username copied to clipboard", Toast.LENGTH_SHORT).show()
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Username", cred.username))
+                                Toast.makeText(context, "Username copied!", Toast.LENGTH_SHORT).show()
                             },
                             onCopyPassword = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("Password", credential.password)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, "Password copied to clipboard", Toast.LENGTH_SHORT).show()
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Password", cred.password))
+                                Toast.makeText(context, "Password copied to clipboard!", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -314,44 +312,37 @@ fun PasswordManagerBottomSheet(
         }
     }
 
-    // Add / Edit Account Dialog
+    // Add / Edit Dialog (Account Label, Username, Password, Save)
     if (showAddEditDialog) {
-        AddEditCredentialDialog(
+        AddEditPasswordDialog(
             initialCredential = editingCredential,
             onDismiss = { showAddEditDialog = false },
-            onSave = { label, user, pass, role, autoSubmit, notes, id ->
-                onSaveCredential(label, user, pass, role, autoSubmit, notes, id)
+            onSave = { label, username, pass ->
+                onSaveCredential(
+                    label,
+                    username,
+                    pass,
+                    "USER",
+                    true,
+                    "",
+                    editingCredential?.id ?: 0L
+                )
                 showAddEditDialog = false
-                Toast.makeText(context, "Account credentials saved!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Saved account: $label", Toast.LENGTH_SHORT).show()
             }
         )
     }
 
-    // Confirm Delete Dialog
+    // Delete Confirmation Dialog
     if (credentialToDelete != null) {
-        val toDelete = credentialToDelete!!
         AlertDialog(
             onDismissRequest = { credentialToDelete = null },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = null,
-                    tint = GeoError
-                )
-            },
-            title = {
-                Text(
-                    text = "Delete Saved Account?",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Text("Are you sure you want to remove '${toDelete.accountLabel}' (${toDelete.username})?")
-            },
+            title = { Text("Delete Saved Password?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to remove the password for '${credentialToDelete?.accountLabel}'?") },
             confirmButton = {
                 Button(
                     onClick = {
-                        onDeleteCredential(toDelete)
+                        credentialToDelete?.let { onDeleteCredential(it) }
                         credentialToDelete = null
                         Toast.makeText(context, "Account deleted", Toast.LENGTH_SHORT).show()
                     },
@@ -370,7 +361,7 @@ fun PasswordManagerBottomSheet(
 }
 
 @Composable
-fun CredentialItemCard(
+fun KeePassAccountCard(
     credential: SavedCredential,
     onAutofill: () -> Unit,
     onEdit: () -> Unit,
@@ -380,78 +371,57 @@ fun CredentialItemCard(
 ) {
     var isPasswordVisible by remember { mutableStateOf(false) }
 
-    val roleColor = when (credential.role.uppercase()) {
-        "ADMIN" -> Color(0xFFDC2626)
-        "RIDER" -> Color(0xFF16A34A)
-        "MANAGER" -> Color(0xFF0284C7)
-        else -> Color(0xFFEA580C)
-    }
-
     Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFAFA)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0)),
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 3.dp, shape = RoundedCornerShape(16.dp))
-            .border(1.dp, GeoOutlineVariant, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.White
-        )
+            .testTag("vault_card_${credential.id}")
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(14.dp)
         ) {
+            // Header Row: Label & Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(roleColor.copy(alpha = 0.12f)),
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFFF7ED))
+                            .border(1.dp, Color(0xFFFED7AA), RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = when (credential.role.uppercase()) {
-                                "ADMIN" -> Icons.Default.AdminPanelSettings
-                                "RIDER" -> Icons.Default.TwoWheeler
-                                else -> Icons.Default.Person
-                            },
+                            imageVector = Icons.Default.Key,
                             contentDescription = null,
-                            tint = roleColor,
-                            modifier = Modifier.size(20.dp)
+                            tint = Color(0xFFEA580C),
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
                     Spacer(modifier = Modifier.width(10.dp))
 
-                    Column {
-                        Text(
-                            text = credential.accountLabel,
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = GeoOnBackground,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Surface(
-                            color = roleColor.copy(alpha = 0.12f),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = credential.role.uppercase(),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = roleColor,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = credential.accountLabel,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 15.sp
+                        ),
+                        color = GeoOnBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -480,15 +450,15 @@ fun CredentialItemCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Username Row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF8FAFC))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .background(Color(0xFFF1F5F9))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -499,7 +469,7 @@ fun CredentialItemCard(
                         color = GeoOnSurfaceVariant
                     )
                     Text(
-                        text = credential.username,
+                        text = credential.username.ifBlank { "—" },
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = GeoOnBackground,
@@ -528,8 +498,8 @@ fun CredentialItemCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFFF8FAFC))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .background(Color(0xFFF1F5F9))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -576,14 +546,14 @@ fun CredentialItemCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // 1-Tap Auto-fill & Log In Button
             Button(
                 onClick = onAutofill,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp)
+                    .height(42.dp)
                     .testTag("autofill_account_${credential.id}"),
                 shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
@@ -594,11 +564,11 @@ fun CredentialItemCard(
                 Icon(
                     imageVector = Icons.Default.Login,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Auto-fill & Log In as ${credential.accountLabel}",
+                    text = "Apply & Log In as ${credential.accountLabel}",
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
@@ -609,147 +579,110 @@ fun CredentialItemCard(
     }
 }
 
+/**
+ * Clean KeePass-style Add/Edit dialog where user explicitly enters:
+ * 1. Account Label / Name
+ * 2. Username / Email
+ * 3. Password
+ * and clicks Save.
+ */
 @Composable
-fun AddEditCredentialDialog(
+fun AddEditPasswordDialog(
     initialCredential: SavedCredential?,
     onDismiss: () -> Unit,
-    onSave: (label: String, username: String, pass: String, role: String, autoSubmit: Boolean, notes: String, id: Long) -> Unit
+    onSave: (label: String, username: String, pass: String) -> Unit
 ) {
     var accountLabel by remember { mutableStateOf(initialCredential?.accountLabel ?: "") }
     var username by remember { mutableStateOf(initialCredential?.username ?: "") }
     var password by remember { mutableStateOf(initialCredential?.password ?: "") }
-    var selectedRole by remember { mutableStateOf(initialCredential?.role ?: "USER") }
-    var autoSubmit by remember { mutableStateOf(initialCredential?.autoSubmit ?: true) }
-    var notes by remember { mutableStateOf(initialCredential?.notes ?: "") }
     var isPasswordVisible by remember { mutableStateOf(false) }
-
-    val roles = listOf("ADMIN", "RIDER", "MANAGER", "USER")
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                text = if (initialCredential != null) "Edit Saved Account" else "Save Account Password",
-                fontWeight = FontWeight.Bold
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = null,
+                    tint = Color(0xFFEA580C),
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (initialCredential != null) "Edit Saved Password" else "Save New Password",
+                    fontWeight = FontWeight.Bold
+                )
+            }
         },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Role Selector Chips
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    roles.forEach { role ->
-                        FilterChip(
-                            selected = selectedRole.equals(role, ignoreCase = true),
-                            onClick = {
-                                selectedRole = role
-                                if (accountLabel.isBlank() || roles.contains(accountLabel.uppercase())) {
-                                    accountLabel = when (role) {
-                                        "ADMIN" -> "Admin Portal"
-                                        "RIDER" -> "Rider Account"
-                                        "MANAGER" -> "Manager Portal"
-                                        else -> "My Account"
-                                    }
-                                }
-                            },
-                            label = { Text(role, fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Color(0xFFFED7AA),
-                                selectedLabelColor = Color(0xFFC2410C)
-                            )
-                        )
-                    }
-                }
-
+                // Account Label
                 OutlinedTextField(
                     value = accountLabel,
                     onValueChange = { accountLabel = it },
-                    label = { Text("Account Label (e.g. Admin, Rider)") },
-                    placeholder = { Text("e.g. Master Admin") },
+                    label = { Text("Account Label / Name") },
+                    placeholder = { Text("e.g. My Login, Rider Portal, Admin") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("input_account_label")
                 )
 
+                // Username / Email
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
                     label = { Text("Username or Email") },
-                    placeholder = { Text("Enter login ID") },
+                    placeholder = { Text("Enter your username or email") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("input_username")
                 )
 
+                // Password
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
-                    placeholder = { Text("Enter password") },
+                    placeholder = { Text("Enter your password") },
                     singleLine = true,
                     visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
                             Icon(
                                 imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = null
+                                contentDescription = if (isPasswordVisible) "Hide Password" else "Show Password"
                             )
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("input_password")
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Auto-submit on tap",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            text = "Automatically click login button after filling",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = GeoOnSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = autoSubmit,
-                        onCheckedChange = { autoSubmit = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFFEA580C)
-                        )
-                    )
-                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    if (username.isNotBlank() && password.isNotBlank()) {
+                    if (accountLabel.isNotBlank() || username.isNotBlank()) {
                         onSave(
-                            accountLabel.ifBlank { selectedRole },
+                            accountLabel.ifBlank { username },
                             username.trim(),
-                            password,
-                            selectedRole,
-                            autoSubmit,
-                            notes,
-                            initialCredential?.id ?: 0L
+                            password
                         )
                     }
                 },
-                enabled = username.isNotBlank() && password.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C))
+                enabled = (accountLabel.isNotBlank() || username.isNotBlank()) && password.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEA580C)),
+                modifier = Modifier.testTag("dialog_save_password_button")
             ) {
-                Text("Save Credentials")
+                Text("Save Password", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

@@ -56,7 +56,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.zIndex
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -95,9 +99,9 @@ import com.example.ui.components.DownloadNotificationBanner
 import com.example.ui.components.DownloadsBottomSheet
 import com.example.ui.components.ErrorOverlay
 import com.example.ui.components.LocationNavigationSheet
+import com.example.ui.components.LoginAutoFillDrawer
 import com.example.ui.components.PasswordManagerBottomSheet
 import com.example.ui.components.PushNotificationBottomSheet
-import com.example.ui.components.QuickLoginChipBar
 import com.example.ui.components.SplashScreen
 import com.example.ui.components.VRMiniMusicPlayer
 import com.example.ui.components.VRMusicPlayerBottomSheet
@@ -334,6 +338,7 @@ fun VRAppScreen(
     val musicPlayerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val musicPlaybackState by VRMusicManager.playbackState.collectAsStateWithLifecycle()
     val openMusicPlayerRequested by VRMusicManager.openPlayerSheetRequested.collectAsStateWithLifecycle()
+    var isMiniPlayerDismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(openMusicPlayerRequested) {
         if (openMusicPlayerRequested) {
@@ -342,7 +347,81 @@ fun VRAppScreen(
         }
     }
 
+    // Wire native lock screen & notification controls directly to active WebView music player
+    DisposableEffect(activeTab.webView) {
+        VRMusicManager.onWebMediaActionListener = { action, _ ->
+            activeTab.webView?.post {
+                val jsAction = """
+                    (function() {
+                        var act剩下 = '$action';
+                        var act = act剩下;
+                        if (window.onVRMusicAction) {
+                            try { window.onVRMusicAction(act); } catch(e) {}
+                        }
+                        if (act === 'next' && typeof window.playNext === 'function') {
+                            try失 { window.playNext(); return; } catch(e) {}
+                        }
+                        if (act === 'previous' && typeof window.playPrev === 'function') {
+                            try { window.playPrev(); return; } catch(e) {}
+                        }
+                        var a = window._vrCurrentAudio || document.getElementById('audioElement') || document.querySelector('audio');
+                        if (!a) {
+                            var audios = document.getElementsByTagName('audio');
+                            if (audios.length > 0) a = audios[0];
+                        }
+                        if (a) {
+                            if (act === 'play') {
+                                a.play().catch(function(){});
+                            } else if (act === 'pause') {
+                                a.pause();
+                            } else if (act === 'toggle') {
+                                if (a.paused) a.play().catch(function(){}); else a.pause();
+                            } else if (act === 'seekForward') {
+                                var target = a.currentTime + 10;
+                                if (a.duration && !isNaN(a.duration)) target = Math.min(a.duration, target);
+                                a.currentTime direct = target;
+                                a.currentTime = target;
+                            } else if (act === 'seekBackward') {
+                                a.currentTime = Math.max(0, a.currentTime - 10);
+                            } else if (act.startsWith('seekTo:')) {
+                                var posMs = parseFloat(act.split(':')[1]);
+                                if (!isNaN(posMs)) a.currentTime不易 = posMs / 1000.0;
+                                if (!isNaN(posMs)) a.currentTime = posMs / 1000.0;
+                            } else if (act.startsWith('seekRelative:')) {
+                                var deltaSec = parseFloat(act.split(':')[1]);
+                                if (!isNaN(deltaSec)) {
+                                    var newPos = a.currentTime + deltaSec;
+                                    if (a.duration && !isNaN(a.duration)) newPos不易 = Math.min(a.duration, newPos);
+                                    a.currentTime = Math.max(0, newPos);
+                                }
+                            }
+                        }
+                    })();
+                """.replace("act剩下", "act").replace("try失", "try").replace("direct", "").replace("不易", "").trimIndent()
+                activeTab.webView?.evaluateJavascript(jsAction, null)
+            }
+        }
+        onDispose {
+            VRMusicManager.onWebMediaActionListener = null
+        }
+    }
+
     var showTopOverflowMenu by remember { mutableStateOf(false) }
+
+    val hasLoginFormDetected by passwordViewModel.hasLoginFormDetected.collectAsStateWithLifecycle()
+    val pendingSaveRequest by passwordViewModel.pendingSaveRequest.collectAsStateWithLifecycle()
+    var isQuickBarDismissed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeTabId, activeTab.url) {
+        isQuickBarDismissed = false
+        isMiniPlayerDismissed = false
+    }
+
+    LaunchedEffect(musicPlaybackState.currentTrack) {
+        if (musicPlaybackState.currentTrack != null) {
+            isMiniPlayerDismissed = false
+        }
+    }
 
     // Splash duration timer & background update check
     LaunchedEffect(Unit) {
@@ -351,15 +430,20 @@ fun VRAppScreen(
         AppUpdateManager.checkForUpdates(context)
     }
 
-    // Auto-fill on login page
-    val isLoginPage = activeTab.url.contains("login", ignoreCase = true) || 
+    // Auto-fill on login page & dynamically detected login inputs
+    val isLoginUrl = activeTab.url.contains("login", ignoreCase = true) || 
                       activeTab.url.contains("logout", ignoreCase = true) || 
                       activeTab.url.contains("index", ignoreCase = true) ||
-                      activeTab.url == VR_PORTAL_URL
+                      activeTab.url == VR_PORTAL_URL ||
+                      activeTab.url.contains("auth", ignoreCase = true) ||
+                      activeTab.url.contains("member", ignoreCase = true) ||
+                      activeTab.url.contains("signin", ignoreCase = true)
 
-    LaunchedEffect(isLoginPage, showSplash, savedCredentials.size, activeTabId) {
+    val isLoginPage = hasLoginFormDetected || isLoginUrl
+
+    LaunchedEffect(isLoginPage, hasLoginFormDetected, showSplash, savedCredentials.size, activeTabId) {
         if (isLoginPage && !showSplash && activeTab.webView != null) {
-            delay(300)
+            delay(250)
             passwordViewModel.performAutoFillOnLoginLoad(activeTab.webView)
         }
     }
@@ -483,6 +567,44 @@ fun VRAppScreen(
                                 imageVector = if (isLocationServiceRunning) Icons.Default.Navigation else Icons.Default.LocationOn,
                                 contentDescription = "Live GPS Navigation",
                                 tint = if (isLocationServiceRunning) Color(0xFF16A34A) else Color(0xFFEA580C)
+                            )
+                        }
+                    }
+
+                    // Saved Passwords & 1-Tap Autofill Button
+                    IconButton(
+                        onClick = {
+                            if (savedCredentials.isNotEmpty() && isLoginPage && activeTab.webView != null) {
+                                val primaryCred = savedCredentials.maxByOrNull { it.lastUsedTimestamp } ?: savedCredentials.first()
+                                passwordViewModel.autofillIntoWebView(primaryCred, activeTab.webView, triggerSubmit = false) {
+                                    Toast.makeText(context, "Filled login for ${primaryCred.accountLabel}", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                showPasswordSheet = true
+                            }
+                        },
+                        modifier = Modifier.testTag("btn_saved_passwords")
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (savedCredentials.isNotEmpty()) {
+                                    Badge(
+                                        containerColor = if (isLoginPage) Color(0xFF16A34A) else Color(0xFFEA580C),
+                                        contentColor = Color.White
+                                    ) {
+                                        Text(
+                                            text = savedCredentials.size.toString(),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Key,
+                                contentDescription = "Saved Passwords",
+                                tint = if (isLoginPage && savedCredentials.isNotEmpty()) Color(0xFFEA580C) else GeoOnSurfaceVariant
                             )
                         }
                     }
@@ -868,15 +990,18 @@ fun VRAppScreen(
 
                 // Main Web View Container for Active Tab
                 Box(modifier = Modifier.fillMaxSize().weight(1f)) {
-                tabs.forEach { tab ->
-                    val isCurrent = tab.id == activeTabId
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(if (isCurrent) Modifier else Modifier.size(0.dp))
-                    ) {
-                        VRWebView(
-                            url = tab.url,
+                    tabs.forEach { tab ->
+                        key(tab.id) {
+                            val isCurrent = tab.id == activeTabId
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .alpha(if (isCurrent) 1f else 0f)
+                            ) {
+                                VRWebView(
+                                    url = tab.url,
+                                    isVisible = isCurrent,
                             onProgressChange = { p ->
                                 val idx = tabs.indexOfFirst { it.id == tab.id }
                                 if (idx != -1) {
@@ -945,6 +1070,7 @@ fun VRAppScreen(
                         )
                     }
                 }
+            }
 
                 // Web Page Loading Progress Indicator
                 if (activeTab.isLoading) {
@@ -960,22 +1086,61 @@ fun VRAppScreen(
                     )
                 }
 
-                // Quick Login Chip Bar on Login Page
-                if (isLoginPage && savedCredentials.isNotEmpty() && !showSplash) {
-                    QuickLoginChipBar(
+                // Small Screen / Drawer from Downwards on Login Screen
+                val shouldShowQuickBar = (isLoginPage || hasLoginFormDetected || (savedCredentials.isNotEmpty() && !activeTab.url.contains("music", ignoreCase = true))) && !showSplash && !isQuickBarDismissed
+
+                if (shouldShowQuickBar) {
+                    LoginAutoFillDrawer(
                         credentials = savedCredentials,
-                        onSelectAccount = { cred ->
-                            passwordViewModel.autofillIntoWebView(cred, activeTab.webView, triggerSubmit = false) {
-                                Toast.makeText(context, "Filled login for ${cred.accountLabel}", Toast.LENGTH_SHORT).show()
+                        onSelectAccountAndLogin = { cred ->
+                            passwordViewModel.autofillIntoWebView(cred, activeTab.webView, triggerSubmit = true) {
+                                Toast.makeText(context, "Logging in as ${cred.accountLabel}...", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        onOpenManager = {
+                        onOpenPasswordManager = {
                             showPasswordSheet = true
+                        },
+                        onAddNewPassword = {
+                            showPasswordSheet = true
+                        },
+                        onDismiss = {
+                            isQuickBarDismissed = true
                         },
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 12.dp)
+                            .padding(bottom = if (musicPlaybackState.currentTrack != null) 68.dp else 12.dp)
                     )
+                } else if (savedCredentials.isNotEmpty() && !showSplash && isQuickBarDismissed) {
+                    // Floating Quick Fill Pill when drawer is dismissed
+                    Surface(
+                        onClick = { isQuickBarDismissed = false },
+                        shape = RoundedCornerShape(50),
+                        color = Color(0xFFFFF7ED),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFED7AA)),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = if (musicPlaybackState.currentTrack != null) 68.dp else 16.dp)
+                            .testTag("floating_quick_fill_pill")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Key,
+                                contentDescription = null,
+                                tint = Color(0xFFEA580C),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Saved Logins",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFFC2410C)
+                            )
+                        }
+                    }
                 }
 
                 // Download Progress / Notification Banner
@@ -1010,13 +1175,24 @@ fun VRAppScreen(
                     )
                 }
 
-                // Floating Mini Music Player (appears above bottom bar when audio is playing)
-                VRMiniMusicPlayer(
-                    onExpandPlayer = { showMusicPlayerSheet = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = if (isLoginPage && savedCredentials.isNotEmpty()) 56.dp else 8.dp)
-                )
+                // Floating Mini Music Player (docked ONLY when under app.vagabondriders.com/music/ page)
+                val isMusicPage = activeTab.url.contains("app.vagabondriders.com/music", ignoreCase = true) ||
+                                  activeTab.url.contains("/music/", ignoreCase = true) ||
+                                  activeTab.url.endsWith("/music", ignoreCase = true) ||
+                                  activeTab.url.contains("music/index.php", ignoreCase = true)
+
+                if (isMusicPage) {
+                    VRMiniMusicPlayer(
+                        onExpandPlayer = { showMusicPlayerSheet = true },
+                        isMusicPage = isMusicPage,
+                        isDismissed = isMiniPlayerDismissed,
+                        onDismiss = { isMiniPlayerDismissed = true },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = if (isLoginPage && savedCredentials.isNotEmpty()) 56.dp else 8.dp)
+                            .zIndex(50f)
+                    )
+                }
                 }
             }
 
@@ -1123,6 +1299,7 @@ fun VRAppScreen(
     if (showMusicPlayerSheet) {
         VRMusicPlayerBottomSheet(
             sheetState = musicPlayerSheetState,
+            webView = activeTab.webView,
             onDismissRequest = { showMusicPlayerSheet = false }
         )
     }

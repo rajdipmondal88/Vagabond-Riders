@@ -99,6 +99,7 @@ class VRDownloadBridge(
 @Composable
 fun VRWebView(
     url: String,
+    isVisible: Boolean = true,
     onProgressChange: (Int) -> Unit,
     onPageStarted: (String) -> Unit,
     onPageFinished: (String) -> Unit,
@@ -608,118 +609,495 @@ fun VRWebView(
                         // Vagabond Riders Music & Lock-Screen MediaSession Bridge:
                         val jsMusicLockScreenHook = """
                             (function() {
-                                if (window._vrMusicHookInjected) return;
-                                window._vrMusicHookInjected = true;
+                                function cleanText(t) {
+                                    if (!t) return '';
+                                    try {
+                                        var txt = document.createElement('textarea');
+                                        txt.innerHTML = t;
+                                        var decoded = txt.value || t;
+                                        return decoded
+                                            .replace(/&quot;/g, '"')
+                                            .replace(/&#039;/g, "'")
+                                            .replace(/&#39;/g, "'")
+                                            .replace(/&amp;/g, '&')
+                                            .replace(/&lt;/g, '<')
+                                            .replace(/&gt;/g, '>')
+                                            .replace(/&nbsp;/g, ' ')
+                                            .replace(/\s+/g, ' ')
+                                            .trim();
+                                    } catch(e) {
+                                        return t.replace(/\s+/g, ' ').trim();
+                                    }
+                                }
 
-                                // Hook navigator.mediaSession metadata & state
-                                if (window.navigator && window.navigator.mediaSession) {
-                                    var origMetadataSetter = Object.getOwnPropertyDescriptor(MediaSession.prototype, 'metadata')?.set;
-                                    var currentMetadata = null;
+                                function getBridge() {
+                                    return window.VRMusicPlayer || window.AndroidMusic || window.VagabondMusic;
+                                }
+
+                                window._vrActiveAudios = window._vrActiveAudios || [];
+                                window._vrCurrentAudio = window._vrCurrentAudio || null;
+
+                                function trackAudioElement(audio) {
+                                    if (!audio) return;
+                                    if (window._vrActiveAudios.indexOf(audio) === -1) {
+                                        window._vrActiveAudios.push(audio);
+                                    }
+                                    if (audio._vrHooked) return;
+                                    audio._vrHooked = true;
+
+                                    var events = ['play', 'playing', 'pause', 'ended', 'timeupdate', 'durationchange', 'loadedmetadata', 'canplay', 'loadeddata'];
+                                    events.forEach(function(evt) {
+                                        audio.addEventListener(evt, function() {
+                                            if (evt === 'play' || evt === 'playing') {
+                                                window._vrCurrentAudio = audio;
+                                                extractAndSyncNowPlaying(true);
+                                            } else if (evt === 'pause' || evt === 'ended') {
+                                                extractAndSyncNowPlaying(false);
+                                            } else if (evt === 'timeupdate') {
+                                                if (!audio.paused) {
+                                                    var bridge = getBridge();
+                                                    if (bridge && audio.duration && !isNaN(audio.duration)) {
+                                                        bridge.syncPlaybackState(true, Math.round(audio.currentTime * 1000), Math.round(audio.duration * 1000));
+                                                    }
+                                                }
+                                            } else {
+                                                extractAndSyncNowPlaying();
+                                            }
+                                        }, true);
+                                    });
+                                }
+
+                                // Intercept HTMLMediaElement play/pause prototype methods
+                                if (window.HTMLMediaElement && window.HTMLMediaElement.prototype) {
+                                    if (!window.HTMLMediaElement.prototype._vrPlayHooked) {
+                                        var origPlay = window.HTMLMediaElement.prototype.play;
+                                        window.HTMLMediaElement.prototype.play = function() {
+                                            window._vrCurrentAudio = this;
+                                            trackAudioElement(this);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 50);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 200);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 600);
+                                            return origPlay.apply(this, arguments);
+                                        };
+                                        window.HTMLMediaElement.prototype._vrPlayHooked = true;
+                                    }
+
+                                    if (!window.HTMLMediaElement.prototype._vrPauseHooked) {
+                                        var origPause = window.HTMLMediaElement.prototype.pause;
+                                        window.HTMLMediaElement.prototype.pause = function() {
+                                            var res = origPause.apply(this, arguments);
+                                            setTimeout(function() { extractAndSyncNowPlaying(false); }, 50);
+                                            return res;
+                                        };
+                                        window.HTMLMediaElement.prototype._vrPauseHooked = true;
+                                    }
 
                                     try {
-                                        Object.defineProperty(window.navigator.mediaSession, 'metadata', {
-                                            get: function() { return currentMetadata; },
-                                            set: function(meta) {
-                                                currentMetadata = meta;
-                                                if (meta && window.VRMusicPlayer) {
-                                                    var artworkUrl = '';
-                                                    if (meta.artwork && meta.artwork.length > 0) {
-                                                        artworkUrl = meta.artwork[0].src || '';
+                                        var origSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+                                        if (origSrcDescriptor && !HTMLMediaElement.prototype._vrSrcHooked) {
+                                            Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                                                configurable: true,
+                                                enumerable: true,
+                                                get: function() {
+                                                    return origSrcDescriptor.get ? origSrcDescriptor.get.call(this) : this.getAttribute('src');
+                                                },
+                                                set: function(val) {
+                                                    this._vrExplicitSrc = val;
+                                                    if (origSrcDescriptor.set) {
+                                                        origSrcDescriptor.set.call(this, val);
+                                                    } else {
+                                                        this.setAttribute('src', val);
                                                     }
-                                                    window.VRMusicPlayer.syncMediaMetadata(
-                                                        meta.title || '',
-                                                        meta.artist || '',
-                                                        meta.album || '',
-                                                        artworkUrl,
-                                                        0
-                                                    );
+                                                    trackAudioElement(this);
+                                                    setTimeout(function() { extractAndSyncNowPlaying(); }, 50);
                                                 }
-                                                if (origMetadataSetter) origMetadataSetter.call(window.navigator.mediaSession, meta);
+                                            });
+                                            HTMLMediaElement.prototype._vrSrcHooked = true;
+                                        }
+                                    } catch(e) {}
+                                }
+
+                                // Intercept Audio constructor
+                                if (window.Audio && !window.Audio._vrHooked) {
+                                    var OrigAudio = window.Audio;
+                                    window.Audio = function() {
+                                        var instance = new OrigAudio(...arguments);
+                                        if (arguments.length > 0 && typeof arguments[0] === 'string') {
+                                            instance._vrInitialSrc = arguments[0];
+                                        }
+                                        trackAudioElement(instance);
+                                        return instance;
+                                    };
+                                    window.Audio._vrHooked = true;
+                                }
+
+                                // Intercept document.createElement for audio/video
+                                if (document.createElement && !document.createElement._vrHooked) {
+                                    var origCreateElement = document.createElement;
+                                    document.createElement = function(tagName) {
+                                        var el = origCreateElement.apply(this, arguments);
+                                        if (el && (tagName.toLowerCase() === 'audio' || tagName.toLowerCase() === 'video')) {
+                                            trackAudioElement(el);
+                                        }
+                                        return el;
+                                    };
+                                    document.createElement._vrHooked = true;
+                                }
+
+                                function extractAndSyncNowPlaying(forceState) {
+                                    var bridge = getBridge();
+                                    if (!bridge) return;
+                                    try {
+                                        var title = '';
+                                        var artist = '';
+                                        var album = 'VR Music';
+                                        var artwork = '';
+                                        var streamUrl = '';
+
+                                        // 1. Check window.currentSong / window.nowPlaying / window.currentTrack / window.activeSong / window.song
+                                        var cs = window.currentSong || window.nowPlaying || window.currentTrack || window.activeSong || window.activeTrack || window.song || (window.player && window.player.currentSong) || (window.audioPlayer && window.audioPlayer.currentTrack);
+                                        if (cs && typeof cs === 'object') {
+                                            title = cs.name || cs.title || cs.song_name || cs.songName || cs.track_name || '';
+                                            artist = cs.artist || cs.singer || cs.artist_name || cs.subtitle || cs.singer_name || '';
+                                            album = cs.album || cs.category || cs.album_name || 'VR Music';
+                                            artwork = cs.image || cs.image_url || cs.poster || cs.thumbnail || cs.cover || cs.artwork || cs.art || '';
+                                            streamUrl = cs.url || cs.src || cs.streamUrl || cs.stream_url || cs.media_url || cs.download_url || cs.file || cs.mp3 || cs.audio || '';
+                                        }
+
+                                        // 2. Check window.navigator.mediaSession.metadata
+                                        if ((!title || title === 'Track Name') && window.navigator && window.navigator.mediaSession && window.navigator.mediaSession.metadata) {
+                                            var m = window.navigator.mediaSession.metadata;
+                                            if (m.title) title = m.title;
+                                            if (m.artist && (!artist || artist === 'Artist')) artist = m.artist;
+                                            if (m.album) album = m.album;
+                                            if (!artwork && m.artwork && m.artwork.length > 0) artwork = m.artwork[0].src || '';
+                                        }
+
+                                        // 3. Scan DOM player bar and now playing elements
+                                        if (!title || title === 'Track Name') {
+                                            var titleEl = document.querySelector('#nowPlayingTitle, #playerBar .title, #playerBar .song-title, #playerBar .song-name, #bottom-player .title, .bottom-player .title, .music-player .title, .player-bar .title, .player-bar .song-title, .now-playing .title, .current-song-title, .track-title, .song-title, #songTitle, #songName, .song-name, .player-song-title, [data-player-title], [data-song-title], [data-title], .song-info h4, .song-info h3, .song-info h5, .player-info .title, .player-info h4, .player-info h5, .aplayer-title, .jp-title');
+                                            if (titleEl) title = cleanText(titleEl.innerText || titleEl.textContent);
+                                        }
+
+                                        if (!artist || artist === 'Artist') {
+                                            var artistEl = document.querySelector('#nowPlayingArtist, #playerBar .artist, #playerBar .singer, #playerBar .subtitle, #bottom-player .artist, .bottom-player .artist, .music-player .artist, .player-bar .artist, .now-playing .artist, .current-song-artist, .song-artist, #artistName, #songArtist, .player-artist, [data-player-artist], [data-song-artist], [data-artist], .song-info p, .song-info span, .player-info .artist, .player-info p, .aplayer-author, .jp-artist');
+                                            if (artistEl) artist = cleanText(artistEl.innerText || artistEl.textContent);
+                                        }
+
+                                        if (!artwork) {
+                                            var imgEl = document.querySelector('#nowPlayingImg, #playerBar img, #bottom-player img, .bottom-player img, .player-cover img, .player-thumb img, #albumArt, #songPoster, .current-poster, [data-player-poster], .player-bar img, .now-playing img, .aplayer-pic');
+                                            if (imgEl && imgEl.src && imgEl.src.length > 5 && !imgEl.src.includes('data:image/svg') && !imgEl.src.includes('placeholder')) {
+                                                artwork = imgEl.src;
+                                            }
+                                        }
+
+                                        // 4. Scan active song row in table/playlist
+                                        if (!title || title === 'Track Name') {
+                                            var activeRow = document.querySelector('.song-row.active, .song-row.playing, tr.active, tr.playing, .list-group-item.active, [data-playing="true"], .playlist-item.active, .track-item.active');
+                                            if (activeRow) {
+                                                var rTitle = activeRow.querySelector('.title, .song-name, .track-name, h4, h5, strong, td.title');
+                                                if (rTitle) title = cleanText(rTitle.innerText || rTitle.textContent);
+                                                if (!artist || artist === 'Artist') {
+                                                    var rArtist = activeRow.querySelector('.artist, .singer, .subtitle, p, span.text-muted, td.artist');
+                                                    if (rArtist) artist = cleanText(rArtist.innerText || rArtist.textContent);
+                                                }
+                                                if (!artwork) {
+                                                    var rImg = activeRow.querySelector('.poster, img, .thumb');
+                                                    if (rImg && rImg.src) artwork = rImg.src;
+                                                }
+                                                if (!streamUrl) {
+                                                    streamUrl = activeRow.getAttribute('data-url') || activeRow.getAttribute('data-src') || activeRow.getAttribute('data-stream') || '';
+                                                }
+                                            }
+                                        }
+
+                                        // 5. Check active audio element
+                                        var activeAudio = window._vrCurrentAudio;
+                                        if (!activeAudio || activeAudio.paused) {
+                                            var domAudios = Array.from(document.getElementsByTagName('audio'));
+                                            var allAudios = (window._vrActiveAudios || []).concat(domAudios);
+                                            for (var i = 0; i < allAudios.length; i++) {
+                                                var a = allAudios[i];
+                                                if (a && (!a.paused || a.currentTime > 0)) {
+                                                    activeAudio = a;
+                                                    window._vrCurrentAudio = a;
+                                                    trackAudioElement(a);
+                                                    break;
+                                                }
+                                            }
+                                            if (!activeAudio && domAudios.length > 0) {
+                                                activeAudio = domAudios[0];
+                                                window._vrCurrentAudio = activeAudio;
+                                                trackAudioElement(activeAudio);
+                                            }
+                                        }
+
+                                        // Extract streamUrl from activeAudio if not already set
+                                        if (!streamUrl && activeAudio) {
+                                            streamUrl = activeAudio.currentSrc || activeAudio.src || activeAudio._vrExplicitSrc || activeAudio._vrInitialSrc || activeAudio.getAttribute('src') || '';
+                                            if (!streamUrl) {
+                                                var sourceEl = activeAudio.querySelector('source');
+                                                if (sourceEl) streamUrl = sourceEl.src || sourceEl.getAttribute('src') || '';
+                                            }
+                                        }
+
+                                        // 6. Audio src filename fallback
+                                        if ((!title || title === 'Track Name') && activeAudio && (activeAudio.src || activeAudio.currentSrc)) {
+                                            var rawSrc = activeAudio.src || activeAudio.currentSrc;
+                                            var srcParts = rawSrc.split('?')[0].split('/');
+                                            var fileName = decodeURIComponent(srcParts[srcParts.length - 1] || '');
+                                            if (fileName) {
+                                                title = fileName.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
+                                            }
+                                        }
+
+                                        // 7. Page title fallback
+                                        if (!artist || artist === 'Artist') artist = 'Vagabond Riders';
+                                        if (!title || title === 'Track Name') {
+                                            var dt = document.title || '';
+                                            if (dt && !dt.toLowerCase().includes('vagabond') && !dt.toLowerCase().includes('index.php')) {
+                                                title = dt.split('-')[0].trim();
+                                            }
+                                        }
+
+                                        // Clean text
+                                        title = cleanText(title);
+                                        artist = cleanText(artist);
+                                        album = cleanText(album);
+
+                                        // Resolve relative streamUrl to absolute
+                                        if (streamUrl && !streamUrl.startsWith('http://') && !streamUrl.startsWith('https://') && !streamUrl.startsWith('blob:')) {
+                                            try {
+                                                streamUrl = new URL(streamUrl, window.location.href).href;
+                                            } catch(e) {}
+                                        }
+
+                                        var duration = 0;
+                                        var currentTime = 0;
+                                        var isPlaying = false;
+
+                                        if (activeAudio) {
+                                            if (activeAudio.duration && !isNaN(activeAudio.duration)) duration = Math.round(activeAudio.duration * 1000);
+                                            if (activeAudio.currentTime && !isNaN(activeAudio.currentTime)) currentTime = Math.round(activeAudio.currentTime * 1000);
+                                            isPlaying = (forceState !== undefined) ? forceState : (!activeAudio.paused && !activeAudio.ended);
+                                        } else if (forceState !== undefined) {
+                                            isPlaying = forceState;
+                                        }
+
+                                        if (title && title !== 'Track Name' && title !== 'index.php') {
+                                            bridge.syncNowPlaying(title, artist, album, artwork, isPlaying, currentTime, duration, streamUrl);
+                                        }
+                                    } catch(e) {
+                                        console.log('VR sync error: ' + e);
+                                    }
+                                }
+
+                                window.extractAndSyncVRMusic = extractAndSyncNowPlaying;
+
+                                // Intercept MediaMetadata constructor
+                                if (window.MediaMetadata && !window.MediaMetadata._vrHooked) {
+                                    try {
+                                        var OrigMediaMetadata = window.MediaMetadata;
+                                        window.MediaMetadata = function(init) {
+                                            var instance = new OrigMediaMetadata(init);
+                                            try {
+                                                var bridge = getBridge();
+                                                if (init && bridge) {
+                                                    var title = cleanText(init.title || '');
+                                                    var artist = cleanText(init.artist || 'Vagabond Riders');
+                                                    var album = cleanText(init.album || 'VR Music');
+                                                    var artwork = (init.artwork && init.artwork.length > 0) ? (init.artwork[0].src || '') : '';
+                                                    if (title && title !== 'Track Name') {
+                                                        bridge.syncNowPlaying(title, artist, album, artwork, true, 0, 0, null);
+                                                    }
+                                                }
+                                            } catch(e) {}
+                                            return instance;
+                                        };
+                                        window.MediaMetadata._vrHooked = true;
+                                    } catch(e) {}
+                                }
+
+                                // Intercept navigator.mediaSession.metadata & setActionHandler
+                                if (window.navigator && window.navigator.mediaSession) {
+                                    try {
+                                        var _mediaSessionMeta = window.navigator.mediaSession.metadata;
+                                        Object.defineProperty(window.navigator.mediaSession, 'metadata', {
+                                            configurable: true,
+                                            enumerable: true,
+                                            get: function() { return _mediaSessionMeta; },
+                                            set: function(meta) {
+                                                _mediaSessionMeta = meta;
+                                                if (meta) {
+                                                    var bridge = getBridge();
+                                                    if (bridge) {
+                                                        var title = meta.title || '';
+                                                        var artist = meta.artist || 'Vagabond Riders';
+                                                        var album = meta.album || 'VR Music';
+                                                        var artwork = (meta.artwork && meta.artwork.length > 0) ? (meta.artwork[0].src || '') : '';
+                                                        if (title && title !== 'Track Name') {
+                                                            bridge.syncNowPlaying(title, artist, album, artwork, true, 0, 0);
+                                                        }
+                                                    }
+                                                }
                                             }
                                         });
                                     } catch(e) {}
 
                                     var origSetActionHandler = window.navigator.mediaSession.setActionHandler;
-                                    window._vrWebMediaHandlers = {};
+                                    window._vrWebMediaHandlers = window._vrWebMediaHandlers || {};
                                     window.navigator.mediaSession.setActionHandler = function(action, handler) {
                                         window._vrWebMediaHandlers[action] = handler;
                                         return origSetActionHandler ? origSetActionHandler.apply(this, arguments) : null;
                                     };
                                 }
 
+                                // Intercept playSong / setupMediaSession if defined by PHP page
+                                var origPlaySong = window.playSong;
+                                Object.defineProperty(window, 'playSong', {
+                                    configurable: true,
+                                    get: function() { return origPlaySong; },
+                                    set: function(fn) {
+                                        origPlaySong = function(context, index) {
+                                            var res = fn.apply(this, arguments);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 50);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 200);
+                                            setTimeout(function() { extractAndSyncNowPlaying(true); }, 500);
+                                            return res;
+                                        };
+                                    }
+                                });
+
                                 // Native lock-screen action callback handler
                                 window.onVRMusicAction = function(action) {
                                     if (window._vrWebMediaHandlers && window._vrWebMediaHandlers[action]) {
                                         try { window._vrWebMediaHandlers[action]({ action: action }); } catch(e) {}
                                     }
-                                    var audios = document.querySelectorAll('audio, video');
-                                    if (audios.length > 0) {
-                                        var audio = audios[0];
-                                        if (action === 'play') audio.play();
-                                        else if (action === 'pause') audio.pause();
-                                        else if (action === 'toggle') { if (audio.paused) audio.play(); else audio.pause(); }
-                                        else if (action === 'seekBackward') audio.currentTime = Math.max(0, audio.currentTime - 10);
-                                        else if (action === 'seekForward') audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10);
+                                    if (action === 'next') {
+                                        if (typeof window.playNext === 'function') { try { window.playNext(); return; } catch(e) {} }
+                                        if (typeof window.nextSong === 'function') { try { window.nextSong(); return; } catch(e) {} }
+                                        if (typeof window.next === 'function') { try { window.next(); return; } catch(e) {} }
+                                        var nextBtn = document.querySelector('#nextBtn, .next-btn, [data-action="next"], .btn-next, #btnNext, .fa-forward, .fa-step-forward, [title*="Next"]');
+                                        if (nextBtn) { nextBtn.click(); return; }
+                                    }
+                                    if (action === 'previous') {
+                                        if (typeof window.playPrev === 'function') { try { window.playPrev(); return; } catch(e) {} }
+                                        if (typeof window.prevSong === 'function') { try { window.prevSong(); return; } catch(e) {} }
+                                        if (typeof window.prev === 'function') { try { window.prev(); return; } catch(e) {} }
+                                        var prevBtn = document.querySelector('#prevBtn, .prev-btn, [data-action="prev"], .btn-prev, #btnPrev, .fa-backward, .fa-step-backward, [title*="Prev"]');
+                                        if (prevBtn) { prevBtn.click(); return; }
+                                    }
+                                    var targetAudio = window._vrCurrentAudio || document.querySelector('audio');
+                                    if (!targetAudio) {
+                                        var allAudios = document.getElementsByTagName('audio');
+                                        if (allAudios.length > 0) targetAudio = allAudios[0];
+                                    }
+                                    if (targetAudio) {
+                                        if (action === 'play') targetAudio.play().catch(function(){});
+                                        else if (action === 'pause') targetAudio.pause();
+                                        else if (action === 'toggle') { if (targetAudio.paused) targetAudio.play().catch(function(){}); else targetAudio.pause(); }
+                                        else if (action === 'seekBackward') targetAudio.currentTime = Math.max(0, targetAudio.currentTime - 10);
+                                        else if (action === 'seekForward') targetAudio.currentTime = Math.min(targetAudio.duration || (targetAudio.currentTime + 10), targetAudio.currentTime + 10);
+                                        else if (action.startsWith('seekTo:')) {
+                                            var targetMs = parseFloat(action.split(':')[1]);
+                                            if (!isNaN(targetMs)) targetAudio.currentTime = targetMs / 1000.0;
+                                        } else if (action.startsWith('seekRelative:')) {
+                                            var deltaSec = parseFloat(action.split(':')[1]);
+                                            if (!isNaN(deltaSec)) {
+                                                var newPos = targetAudio.currentTime + deltaSec;
+                                                if (targetAudio.duration && !isNaN(targetAudio.duration)) newPos = Math.min(targetAudio.duration, newPos);
+                                                targetAudio.currentTime = Math.max(0, newPos);
+                                            }
+                                        }
                                     }
                                 };
 
-                                // Auto-detect HTML5 <audio> playback & sync with lock-screen notification
-                                document.addEventListener('play', function(e) {
-                                    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'VIDEO')) {
-                                        var el = e.target;
-                                        var title = el.getAttribute('data-title') || el.getAttribute('title') || document.title || 'Vagabond Music';
-                                        var artist = el.getAttribute('data-artist') || 'Vagabond Riders';
-                                        var album = el.getAttribute('data-album') || 'VR Road Trips';
-                                        var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
-
-                                        if (window.VRMusicPlayer) {
-                                            window.VRMusicPlayer.syncMediaMetadata(title, artist, album, '', duration);
-                                            window.VRMusicPlayer.syncPlaybackState(true, Math.round(el.currentTime * 1000), duration);
-                                        }
-                                    }
-                                }, true);
-
-                                document.addEventListener('pause', function(e) {
-                                    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'VIDEO')) {
-                                        var el = e.target;
-                                        if (window.VRMusicPlayer) {
-                                            var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
-                                            window.VRMusicPlayer.syncPlaybackState(false, Math.round(el.currentTime * 1000), duration);
-                                        }
-                                    }
-                                }, true);
-
-                                document.addEventListener('timeupdate', function(e) {
-                                    if (e.target && e.target.tagName === 'AUDIO' && !e.target.paused) {
-                                        var el = e.target;
-                                        if (window.VRMusicPlayer) {
-                                            var duration = (el.duration && !isNaN(el.duration)) ? Math.round(el.duration * 1000) : 0;
-                                            window.VRMusicPlayer.syncPlaybackState(true, Math.round(el.currentTime * 1000), duration);
-                                        }
-                                    }
-                                }, true);
-
-                                // Intercept clicks on direct audio track links (.mp3, .m4a, .wav, .aac, .ogg)
+                                // Global document listeners
                                 document.addEventListener('click', function(e) {
-                                    var a = e.target.closest('a');
-                                    if (!a) return;
-                                    var href = a.getAttribute('href') || '';
-                                    if (!href) return;
-                                    var lower = href.toLowerCase();
-                                    if (lower.endsWith('.mp3') || lower.endsWith('.m4a') || lower.endsWith('.wav') || lower.endsWith('.aac') || lower.endsWith('.ogg') || lower.endsWith('.flac')) {
-                                        if (window.VRMusicPlayer) {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            var text = (a.innerText || a.textContent || '').trim();
-                                            var title = text.length > 0 ? text : href.substring(href.lastIndexOf('/') + 1);
-                                            var fullUrl = href.startsWith('http') ? href : (window.location.origin + (href.startsWith('/') ? '' : '/') + href);
-                                            window.VRMusicPlayer.playTrack(fullUrl, title, 'Vagabond Riders', '', 0);
-                                        }
-                                    }
+                                    setTimeout(function() { extractAndSyncNowPlaying(); }, 100);
+                                    setTimeout(function() { extractAndSyncNowPlaying(); }, 400);
                                 }, true);
+
+                                // Continuous poller (runs every 1 second)
+                                if (!window._vrMusicPoller) {
+                                    window._vrMusicPoller = setInterval(function() {
+                                        extractAndSyncNowPlaying();
+                                    }, 1000);
+                                }
+
+                                // Attach existing DOM audio elements
+                                var existingAudios = document.getElementsByTagName('audio');
+                                for (var i = 0; i < existingAudios.length; i++) {
+                                    trackAudioElement(existingAudios[i]);
+                                }
+
+                                // Initial run
+                                extractAndSyncNowPlaying();
                             })();
                         """.trimIndent()
                         evaluateJavascript(jsMusicLockScreenHook, null)
+
+                        // Vagabond Riders Password Manager & Login DOM Detector Hook:
+                        val jsPasswordManagerHook = """
+                            (function() {
+                                if (window._vrPasswordHookInjected) return;
+                                window._vrPasswordHookInjected = true;
+
+                                function getAuthBridge() {
+                                    return window.AndroidAuth || window.VRAuth;
+                                }
+
+                                function scanForLoginFields() {
+                                    try {
+                                        var passInputs = document.querySelectorAll('input[type="password"], input[name*="pass" i], input[name*="pwd" i], input[id*="pass" i], input[id*="pwd" i]');
+                                        var userInputs = document.querySelectorAll('input[type="text"], input[type="email"], input[name*="user" i], input[name*="email" i], input[name*="login" i], input[id*="user" i], input[id*="email" i], input[id*="login" i]');
+                                        
+                                        var hasLogin = passInputs.length > 0 || (userInputs.length > 0 && document.querySelector('button[type="submit"], input[type="submit"], [data-action="login"]'));
+                                        var bridge = getAuthBridge();
+                                        if (bridge && typeof bridge.onLoginFormDetected === 'function') {
+                                            bridge.onLoginFormDetected(hasLogin, 'detected:' + passInputs.length);
+                                        }
+                                    } catch(e) {}
+                                }
+
+                                function hookInputs() {
+                                    try {
+                                        var inputs = document.querySelectorAll('input');
+                                        inputs.forEach(function(inp) {
+                                            if (inp._vrAuthHooked) return;
+                                            inp._vrAuthHooked = true;
+                                            
+                                            var isPass = inp.type === 'password' || (inp.name && inp.name.toLowerCase().indexOf('pass') !== -1) || (inp.id && inp.id.toLowerCase().indexOf('pass') !== -1);
+                                            var isUser = (inp.type === 'text' || inp.type === 'email') && ((inp.name && (inp.name.toLowerCase().indexOf('user') !== -1 || inp.name.toLowerCase().indexOf('login') !== -1 || inp.name.toLowerCase().indexOf('email') !== -1)) || (inp.id && (inp.id.toLowerCase().indexOf('user') !== -1 || inp.id.toLowerCase().indexOf('login') !== -1 || inp.id.toLowerCase().indexOf('email') !== -1)));
+                                            
+                                            if (isPass || isUser) {
+                                                inp.addEventListener('focus', function() {
+                                                    var bridge = getAuthBridge();
+                                                    if (bridge && typeof bridge.onLoginFormDetected === 'function') {
+                                                        bridge.onLoginFormDetected(true, 'focus');
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    } catch(e) {}
+                                }
+
+                                scanForLoginFields();
+                                hookInputs();
+
+                                if (window.MutationObserver) {
+                                    var observer = new MutationObserver(function() {
+                                        scanForLoginFields();
+                                        hookInputs();
+                                    });
+                                    observer.observe(document.body || document.documentElement, {
+                                        childList: true,
+                                        subtree: true
+                                    });
+                                }
+                            })();
+                        """.trimIndent()
+                        evaluateJavascript(jsPasswordManagerHook, null)
 
                         // Immediately inject last known location if available
                         BackgroundLocationManager.currentLocation.value?.let { loc ->
@@ -853,6 +1231,7 @@ fun VRWebView(
         },
         update = { webView ->
             currentWebView = webView
+            webView.visibility = if (isVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
         },
         modifier = modifier.testTag("vr_web_view")
     )

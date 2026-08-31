@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.pm.ServiceInfo
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -119,9 +120,12 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
         initMediaSession()
         registerNoisyReceiver()
         VRMusicManager.bindService(this)
+        startForegroundNotification()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        createNotificationChannel()
+        startForegroundNotification()
         MediaButtonReceiver.handleIntent(mediaSession, intent)
         
         intent?.action?.let { action ->
@@ -203,9 +207,25 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
         }
     }
 
+    fun stopNativeMediaPlayerOnly() {
+        try {
+            stopProgressTracker()
+            releaseMediaPlayer()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping native media player", e)
+        }
+    }
+
+    fun isNativePlaying(): Boolean {
+        return mediaPlayer?.isPlaying == true
+    }
+
     fun prepareAndPlay(track: VRTrack) {
         serviceScope.launch {
             try {
+                // Priority switch: Pause any running web audio so offline track plays cleanly
+                VRMusicManager.notifyWebAction("pause")
+
                 VRMusicManager.updatePlaybackState {
                     it.copy(
                         currentTrack = track,
@@ -297,8 +317,42 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
         }
     }
 
+    /**
+     * Called when track information or playback state is synced from the web player
+     * (e.g. user plays a song inside the PHP Vagabond Music interface).
+     * Online web playback has top priority: stops any active offline MediaPlayer.
+     */
+    fun syncExternalTrack(track: VRTrack, isPlaying: Boolean, positionMs: Long, durationMs: Long) {
+        serviceScope.launch {
+            try {
+                if (isPlaying && mediaPlayer != null) {
+                    // Online song is starting! Stop and release offline MediaPlayer immediately
+                    stopProgressTracker()
+                    releaseMediaPlayer()
+                }
+                requestAudioFocusInternal()
+                startForegroundNotification()
+                val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                updatePlaybackStateCompat(state, positionMs)
+                loadArtworkAndMetadata(track, durationMs)
+                updateForegroundNotification()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in syncExternalTrack", e)
+            }
+        }
+    }
+
+    fun updateExternalPlaybackStatus(isPlaying: Boolean, positionMs: Long) {
+        serviceScope.launch {
+            val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+            updatePlaybackStateCompat(state, positionMs)
+            updateForegroundNotification()
+        }
+    }
+
     fun play() {
         val player = mediaPlayer
+        val track = VRMusicManager.playbackState.value.currentTrack
         if (player != null && !player.isPlaying) {
             requestAudioFocusInternal()
             player.start()
@@ -308,11 +362,15 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
             startProgressTracker()
             startForegroundNotification()
             updateForegroundNotification()
+        } else if (player == null && track != null && (track.isOfflineAvailable || !track.localFilePath.isNullOrBlank())) {
+            prepareAndPlay(track)
         } else if (player == null) {
-            val current = VRMusicManager.playbackState.value.currentTrack
-            if (current != null) {
-                prepareAndPlay(current)
-            }
+            requestAudioFocusInternal()
+            VRMusicManager.updatePlaybackState { it.copy(isPlaying = true) }
+            updatePlaybackStateCompat(PlaybackStateCompat.STATE_PLAYING, VRMusicManager.playbackState.value.positionMs)
+            startForegroundNotification()
+            updateForegroundNotification()
+            VRMusicManager.notifyWebAction("play")
         }
     }
 
@@ -325,14 +383,37 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
             updatePlaybackStateCompat(PlaybackStateCompat.STATE_PAUSED, currentPos)
             stopProgressTracker()
             updateForegroundNotification()
+        } else if (player == null) {
+            VRMusicManager.updatePlaybackState { it.copy(isPlaying = false) }
+            updatePlaybackStateCompat(PlaybackStateCompat.STATE_PAUSED, VRMusicManager.playbackState.value.positionMs)
+            updateForegroundNotification()
+            VRMusicManager.notifyWebAction("pause")
         }
     }
 
     fun togglePlayPause() {
-        if (mediaPlayer?.isPlaying == true) {
-            pause()
+        val player = mediaPlayer
+        val track = VRMusicManager.playbackState.value.currentTrack
+        if (player != null) {
+            if (player.isPlaying) {
+                pause()
+            } else {
+                play()
+            }
+        } else if (track != null && (track.isOfflineAvailable || !track.localFilePath.isNullOrBlank())) {
+            val isCurrentlyPlaying = VRMusicManager.playbackState.value.isPlaying
+            if (isCurrentlyPlaying) {
+                pause()
+            } else {
+                prepareAndPlay(track)
+            }
         } else {
-            play()
+            val isCurrentlyPlaying = VRMusicManager.playbackState.value.isPlaying
+            if (isCurrentlyPlaying) {
+                pause()
+            } else {
+                play()
+            }
         }
     }
 
@@ -350,18 +431,41 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
     }
 
     fun seekTo(posMs: Long) {
-        val player = mediaPlayer ?: return
-        val safePos = posMs.coerceIn(0L, player.duration.toLong())
-        player.seekTo(safePos.toInt())
-        VRMusicManager.updatePlaybackState { it.copy(positionMs = safePos) }
-        val state = if (player.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
-        updatePlaybackStateCompat(state, safePos)
-        updateForegroundNotification()
+        val player = mediaPlayer
+        if (player != null) {
+            val safePos = posMs.coerceIn(0L, player.duration.toLong().coerceAtLeast(1L))
+            player.seekTo(safePos.toInt())
+            VRMusicManager.updatePlaybackState { it.copy(positionMs = safePos) }
+            val state = if (player.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+            updatePlaybackStateCompat(state, safePos)
+            updateForegroundNotification()
+        } else {
+            // Online web audio stream seeking
+            VRMusicManager.updatePlaybackState { it.copy(positionMs = posMs) }
+            VRMusicManager.notifyWebAction("seekTo:$posMs")
+        }
     }
 
     fun seekRelative(deltaMs: Long) {
-        val currentPos = mediaPlayer?.currentPosition?.toLong() ?: 0L
-        seekTo(currentPos + deltaMs)
+        val player = mediaPlayer
+        if (player != null) {
+            val currentPos = player.currentPosition.toLong()
+            val duration = player.duration.toLong().coerceAtLeast(1L)
+            val target = (currentPos + deltaMs).coerceIn(0L, duration)
+            seekTo(target)
+        } else {
+            val currentPos = VRMusicManager.playbackState.value.positionMs
+            val duration = VRMusicManager.playbackState.value.durationMs
+            val maxBound = if (duration > 0L) duration else Long.MAX_VALUE
+            val target = (currentPos + deltaMs).coerceIn(0L, maxBound)
+            VRMusicManager.updatePlaybackState { it.copy(positionMs = target) }
+            if (deltaMs > 0) {
+                VRMusicManager.notifyWebAction("seekForward")
+            } else {
+                VRMusicManager.notifyWebAction("seekBackward")
+            }
+            VRMusicManager.notifyWebAction("seekTo:$target")
+        }
     }
 
     fun stopPlayback() {
@@ -444,42 +548,72 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
     }
 
     private fun loadArtworkAndMetadata(track: VRTrack, durationMs: Long) {
+        val initialArtwork = currentArtworkBitmap ?: generateFallbackArtwork(track.title)
+        val initialMetadata = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title.ifBlank { "Vagabond Music" })
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist.ifBlank { "Vagabond Riders" })
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album.ifBlank { "VR Music" })
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title.ifBlank { "Vagabond Music" })
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist.ifBlank { "Vagabond Riders" })
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, track.album.ifBlank { "VR Music" })
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
+            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, initialArtwork)
+            .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, initialArtwork)
+            .build()
+
+        mediaSession.setMetadata(initialMetadata)
+        updateForegroundNotification()
+
         serviceScope.launch {
-            val artwork = if (!track.artworkUrl.isNullOrBlank() && track.artworkUrl != lastArtworkUrl) {
-                withContext(Dispatchers.IO) {
+            val rawArtworkUrl = track.artworkUrl?.trim()
+            val resolvedArtworkUrl = if (!rawArtworkUrl.isNullOrBlank()) {
+                when {
+                    rawArtworkUrl.startsWith("http://", ignoreCase = true) || rawArtworkUrl.startsWith("https://", ignoreCase = true) -> rawArtworkUrl
+                    rawArtworkUrl.startsWith("//") -> "https:$rawArtworkUrl"
+                    else -> "https://app.vagabondriders.com/" + rawArtworkUrl.removePrefix("/")
+                }
+            } else null
+
+            if (!resolvedArtworkUrl.isNullOrBlank() && resolvedArtworkUrl != lastArtworkUrl) {
+                val artwork = withContext(Dispatchers.IO) {
                     try {
-                        val req = Request.Builder().url(track.artworkUrl).build()
+                        val req = Request.Builder()
+                            .url(resolvedArtworkUrl)
+                            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                            .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                            .build()
                         val res = okHttpClient.newCall(req).execute()
                         if (res.isSuccessful) {
                             res.body?.byteStream()?.use { stream ->
                                 BitmapFactory.decodeStream(stream)
                             }
                         } else null
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to load artwork bitmap from $resolvedArtworkUrl", e)
                         null
                     }
                 }
-            } else {
-                currentArtworkBitmap
-            } ?: generateFallbackArtwork(track.title)
 
-            currentArtworkBitmap = artwork
-            lastArtworkUrl = track.artworkUrl
+                if (artwork != null) {
+                    currentArtworkBitmap = artwork
+                    lastArtworkUrl = resolvedArtworkUrl
 
-            val metadata = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, track.album)
-                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork)
-                .build()
+                    val metadata = MediaMetadataCompat.Builder()
+                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title.ifBlank { "Vagabond Music" })
+                        .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist.ifBlank { "Vagabond Riders" })
+                        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album.ifBlank { "VR Music" })
+                        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title.ifBlank { "Vagabond Music" })
+                        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist.ifBlank { "Vagabond Riders" })
+                        .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, track.album.ifBlank { "VR Music" })
+                        .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
+                        .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+                        .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, artwork)
+                        .build()
 
-            mediaSession.setMetadata(metadata)
-            updateForegroundNotification()
+                    mediaSession.setMetadata(metadata)
+                    updateForegroundNotification()
+                }
+            }
         }
     }
 
@@ -522,14 +656,30 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
     }
 
     private fun startForegroundNotification() {
-        val notification = buildMediaNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        try {
+            val notification = buildMediaNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting foreground service notification", e)
+        }
     }
 
     private fun updateForegroundNotification() {
-        val notification = buildMediaNotification()
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, notification)
+        try {
+            val notification = buildMediaNotification()
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating foreground notification", e)
+        }
     }
 
     private fun buildMediaNotification(): Notification {
@@ -607,14 +757,16 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setLargeIcon(currentArtworkBitmap ?: generateFallbackArtwork(track.title))
-            .setContentTitle(track.title)
-            .setContentText("${track.artist} • ${track.album}")
+            .setContentTitle(track.title.ifBlank { "Vagabond Riders Music" })
+            .setContentText(if (track.artist.isNotBlank()) "${track.artist} • ${track.album}" else "Vagabond Riders")
             .setSubText("Vagabond Music")
             .setContentIntent(contentPendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setOnlyAlertOnce(true)
             .setOngoing(isPlaying)
+            .setSilent(true)
             .setStyle(mediaStyle)
             // Actions: 0 = Prev, 1 = Play/Pause, 2 = Next, 3 = Rewind 10s, 4 = Forward 10s
             .addAction(android.R.drawable.ic_media_previous, "Previous", prevPendingIntent)
@@ -632,11 +784,13 @@ class VRMediaPlaybackService : Service(), AudioManager.OnAudioFocusChangeListene
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Vagabond Riders Music Player",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Background playback and lock-screen media controls"
-                setShowBadge(false)
+                setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(null, null)
+                enableVibration(false)
             }
             manager.createNotificationChannel(channel)
         }

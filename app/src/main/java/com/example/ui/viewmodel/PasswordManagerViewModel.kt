@@ -5,6 +5,8 @@ import android.content.Context
 import android.webkit.WebView
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.auth.SavePasswordPromptRequest
+import com.example.auth.VRAuthJavascriptBridge
 import com.example.data.AppDatabase
 import com.example.data.CredentialRepository
 import com.example.data.SavedCredential
@@ -13,7 +15,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -32,6 +33,9 @@ class PasswordManagerViewModel(application: Application) : AndroidViewModel(appl
     private val _lastAutofilledAccount = MutableStateFlow<String?>(null)
     val lastAutofilledAccount: StateFlow<String?> = _lastAutofilledAccount.asStateFlow()
 
+    val pendingSaveRequest: StateFlow<SavePasswordPromptRequest?> = VRAuthJavascriptBridge.pendingSaveRequest
+    val hasLoginFormDetected: StateFlow<Boolean> = VRAuthJavascriptBridge.hasLoginFormDetected
+
     init {
         val db = AppDatabase.getDatabase(application)
         repository = CredentialRepository(db.credentialDao())
@@ -40,6 +44,23 @@ class PasswordManagerViewModel(application: Application) : AndroidViewModel(appl
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+        // Clean up any legacy template accounts
+        viewModelScope.launch {
+            try {
+                val all = repository.allCredentials
+                // Remove pre-installed dummy/template accounts if they exist
+                repository.allCredentials.collect { creds ->
+                    creds.filter { 
+                        it.username == "rider@vagabondriders.com" || 
+                        it.username == "admin@vagabondriders.com" ||
+                        it.username.contains("bhagavanriders.com", ignoreCase = true)
+                    }.forEach {
+                        repository.deleteCredential(it)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     fun setAutoFillOnPageLoad(enabled: Boolean) {
@@ -68,7 +89,29 @@ class PasswordManagerViewModel(application: Application) : AndroidViewModel(appl
                 notes = notes.trim()
             )
             repository.saveCredential(credential)
+            VRAuthJavascriptBridge.clearPendingSaveRequest()
         }
+    }
+
+    fun confirmPendingSaveRequest(
+        accountLabel: String,
+        role: String = "USER",
+        autoSubmit: Boolean = false,
+        notes: String = ""
+    ) {
+        val req = pendingSaveRequest.value ?: return
+        saveCredential(
+            accountLabel = accountLabel.ifBlank { req.appName.ifBlank { req.username } },
+            username = req.username,
+            password = req.password,
+            role = role,
+            autoSubmit = autoSubmit,
+            notes = notes
+        )
+    }
+
+    fun dismissPendingSaveRequest() {
+        VRAuthJavascriptBridge.clearPendingSaveRequest()
     }
 
     fun deleteCredential(credential: SavedCredential) {
@@ -103,7 +146,7 @@ class PasswordManagerViewModel(application: Application) : AndroidViewModel(appl
             val safePass = JSONObject.quote(credential.password)
             val autoClick = if (triggerSubmit) "true" else "false"
 
-            // Comprehensive JS Form Injector that covers all web login form input elements
+            // Comprehensive JS Form Injector with Framework compatibility (React, Vue, Angular, Native HTML)
             val js = """
                 (function() {
                     try {
@@ -111,42 +154,80 @@ class PasswordManagerViewModel(application: Application) : AndroidViewModel(appl
                         var passwordValue = $safePass;
                         var shouldSubmit = $autoClick;
 
-                        // Find username field
-                        var userField = document.querySelector('input[type="text"], input[type="email"], input[name="username"], input[name="user"], input[name="email"], input[name="userid"], input[name="login"], input[id*="user"], input[id*="email"], input[id*="login"], input[placeholder*="user" i], input[placeholder*="email" i], input[placeholder*="login" i]');
+                        function setNativeValue(element, value) {
+                            if (!element) return;
+                            try {
+                                var valueSetter = Object.getOwnPropertyDescriptor(element, 'value') ? 
+                                                  Object.getOwnPropertyDescriptor(element, 'value').set : null;
+                                var prototype = Object.getPrototypeOf(element);
+                                var prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value') ? 
+                                                          Object.getOwnPropertyDescriptor(prototype, 'value').set : null;
+                                
+                                if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+                                    prototypeValueSetter.call(element, value);
+                                } else if (valueSetter) {
+                                    valueSetter.call(element, value);
+                                } else {
+                                    element.value = value;
+                                }
+                            } catch(ex) {
+                                element.value = value;
+                            }
+                            
+                            element.dispatchEvent(new Event('input', { bubbles: true }));
+                            element.dispatchEvent(new Event('change', { bubbles: true }));
+                            element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+                            element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+                        }
+
+                        // Find password field first
+                        var passField = document.querySelector('input[type="password"], input[name="password" i], input[name="pass" i], input[name="pwd" i], input[id*="pass" i], input[id*="pwd" i], input[placeholder*="pass" i]');
                         
-                        // Find password field
-                        var passField = document.querySelector('input[type="password"], input[name="password"], input[name="pass"], input[name="pwd"], input[id*="pass"], input[id*="pwd"], input[placeholder*="pass" i]');
+                        // Find username field (prioritize within same form if password field is found)
+                        var form = passField ? passField.closest('form') : null;
+                        var root = form || document;
+
+                        var userField = root.querySelector('input[type="text"], input[type="email"], input[name="username" i], input[name="user" i], input[name="email" i], input[name="userid" i], input[name="login" i], input[id*="user" i], input[id*="email" i], input[id*="login" i], input[placeholder*="user" i], input[placeholder*="email" i], input[placeholder*="login" i], input[placeholder*="mobile" i], input[placeholder*="phone" i]');
+                        
+                        if (!userField && root !== document) {
+                            userField = document.querySelector('input[type="text"], input[type="email"], input[name="username" i], input[name="user" i], input[name="email" i], input[id*="user" i], input[id*="email" i], input[id*="login" i]');
+                        }
+
+                        var filledAny = false;
 
                         if (userField) {
                             userField.focus();
-                            userField.value = usernameValue;
-                            userField.dispatchEvent(new Event('input', { bubbles: true }));
-                            userField.dispatchEvent(new Event('change', { bubbles: true }));
-                            userField.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+                            setNativeValue(userField, usernameValue);
+                            userField.style.backgroundColor = '#FFF7ED';
+                            userField.style.borderColor = '#EA580C';
+                            filledAny = true;
                         }
 
                         if (passField) {
                             passField.focus();
-                            passField.value = passwordValue;
-                            passField.dispatchEvent(new Event('input', { bubbles: true }));
-                            passField.dispatchEvent(new Event('change', { bubbles: true }));
-                            passField.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+                            setNativeValue(passField, passwordValue);
+                            passField.style.backgroundColor = '#FFF7ED';
+                            passField.style.borderColor = '#EA580C';
+                            filledAny = true;
                         }
 
                         if (shouldSubmit) {
                             setTimeout(function() {
-                                var submitBtn = document.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.login-btn, input.login-btn, #submit, #login-btn, button:not([type="button"])');
+                                var submitBtn = (form && form.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.login-btn, input.login-btn, #submit, #login-btn, button:not([type="button"])')) ||
+                                                document.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.login-btn, input.login-btn, #submit, #login-btn, [data-action="login"], [data-action="signin"], button.signin, button.login');
                                 if (submitBtn) {
                                     submitBtn.click();
-                                } else {
-                                    var form = (passField && passField.form) || (userField && userField.form) || document.querySelector('form');
-                                    if (form) {
-                                        form.submit();
-                                    }
+                                } else if (form) {
+                                    form.submit();
+                                } else if (passField) {
+                                    // Dispatch Enter key event as fallback
+                                    passField.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                    passField.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                    passField.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                                 }
                             }, 250);
                         }
-                        return "SUCCESS";
+                        return filledAny ? "SUCCESS" : "NO_FIELDS_FOUND";
                     } catch(e) {
                         return "ERROR: " + e.message;
                     }

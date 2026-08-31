@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -102,6 +103,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun VRMusicPlayerBottomSheet(
     sheetState: SheetState,
+    webView: android.webkit.WebView? = null,
     onDismissRequest: () -> Unit
 ) {
     val context = LocalContext.current
@@ -144,8 +146,67 @@ fun VRMusicPlayerBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp, vertical = 4.dp)
         ) {
+            // Top Bar with Minimize Downwards Action & Status
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            sheetState.hide()
+                            onDismissRequest()
+                        }
+                    },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF1E293B))
+                        .testTag("btn_minimize_music_player")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Minimize to Mini Player",
+                        tint = Color.White
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Vagabond Music Player",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.3.sp
+                        ),
+                        color = Color.White
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (currentTrack?.isOfflineAvailable == true) Color(0xFF4ADE80) else Color(0xFF38BDF8))
+                        )
+                        Text(
+                            text = if (currentTrack?.isOfflineAvailable == true) "Offline Library Audio" else "Online Web Audio Stream",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (currentTrack?.isOfflineAvailable == true) Color(0xFF4ADE80) else Color(0xFF38BDF8)
+                        )
+                    }
+                }
+
+                // Decorative spacer to keep center alignment
+                Spacer(modifier = Modifier.size(36.dp))
+            }
+
             // Header Tabs
             TabRow(
                 selectedTabIndex = selectedTab,
@@ -203,19 +264,49 @@ fun VRMusicPlayerBottomSheet(
                             if (currentTrack != null && !currentTrack.isOfflineAvailable && !isDownloadingCurrent) {
                                 isDownloadingCurrent = true
                                 downloadProgress = 0f
-                                VRMusicManager.downloadTrackForOffline(
-                                    context = context,
-                                    track = currentTrack,
-                                    onProgress = { prog -> downloadProgress = prog },
-                                    onResult = { success, error ->
-                                        isDownloadingCurrent = false
-                                        if (success) {
-                                            Toast.makeText(context, "Downloaded for offline ride!", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "Download failed: $error", Toast.LENGTH_LONG).show()
+
+                                val startDownload = { trackToDownload: VRTrack ->
+                                    VRMusicManager.downloadTrackForOffline(
+                                        context = context,
+                                        track = trackToDownload,
+                                        onProgress = { prog -> downloadProgress = prog },
+                                        onResult = { success, error ->
+                                            isDownloadingCurrent = false
+                                            if (success) {
+                                                Toast.makeText(context, "Downloaded for offline ride!", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Download failed: $error", Toast.LENGTH_LONG).show()
+                                            }
                                         }
+                                    )
+                                }
+
+                                if ((currentTrack.streamUrl.isBlank() || !currentTrack.streamUrl.startsWith("http", ignoreCase = true)) && webView != null) {
+                                    webView.evaluateJavascript("""
+                                        (function() {
+                                            var a = window._vrCurrentAudio || document.querySelector('audio');
+                                            var s = a ? (a.currentSrc || a.src) : '';
+                                            if (!s) {
+                                                var cs = window.currentSong || window.nowPlaying || window.currentTrack;
+                                                if (cs) s = cs.url || cs.src || cs.streamUrl || cs.download_url || cs.media_url || '';
+                                            }
+                                            if (s && !s.startsWith('http://') && !s.startsWith('https://')) {
+                                                try { s = new URL(s, window.location.href).href; } catch(e) {}
+                                            }
+                                            return s || '';
+                                        })()
+                                    """.trimIndent()) { result ->
+                                        val cleanedUrl = result?.removeSurrounding("\"")?.replace("\\/", "/")?.trim() ?: ""
+                                        val resolvedTrack = if (cleanedUrl.startsWith("http://", ignoreCase = true) || cleanedUrl.startsWith("https://", ignoreCase = true)) {
+                                            currentTrack.copy(streamUrl = cleanedUrl)
+                                        } else {
+                                            currentTrack
+                                        }
+                                        startDownload(resolvedTrack)
                                     }
-                                )
+                                } else {
+                                    startDownload(currentTrack)
+                                }
                             }
                         }
                     )
@@ -238,7 +329,9 @@ fun VRMusicPlayerBottomSheet(
                         currentTrack = currentTrack,
                         isPlaying = state.isPlaying,
                         onPlayOffline = { offlineTrack ->
-                            VRMusicManager.playTrack(context, offlineTrack.toVRTrack())
+                            val allOfflineVRTracks = offlineTracks.map { it.toVRTrack() }
+                            val clickedIndex = offlineTracks.indexOfFirst { it.id == offlineTrack.id }.coerceAtLeast(0)
+                            VRMusicManager.setPlaylistAndPlay(context, allOfflineVRTracks, clickedIndex)
                         },
                         onDeleteOffline = { id ->
                             VRMusicManager.deleteOfflineTrack(context, id) {
